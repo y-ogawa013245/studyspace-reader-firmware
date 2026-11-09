@@ -1,0 +1,4 @@
+build/
+dist/
+installer/esptool.exe
+*.zip

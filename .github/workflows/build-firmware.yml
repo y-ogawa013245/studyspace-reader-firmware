@@ -1,0 +1,60 @@
+name: Build ATOMS3 Firmware & Installer Package
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build-installer:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Arduino CLI
+        uses: arduino/setup-arduino-cli@v2
+
+      - name: Install M5Stack ESP32 Core & Libraries
+        shell: pwsh
+        run: |
+          arduino-cli config init
+          arduino-cli config add board_manager.additional_urls https://m5stack.oss-cn-shenzhen.aliyuncs.com/resource/arduino/package_m5stack_index.json
+          arduino-cli core update-index
+          arduino-cli core install m5stack:esp32
+          arduino-cli lib install "M5Unified" "M5UnitUnified"
+          git clone https://github.com/m5stack/M5Unit-NFC.git "$HOME/Documents/Arduino/libraries/M5Unit-NFC"
+
+      - name: Compile ATOMS3 Firmware (.merged.bin)
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path build -Force | Out-Null
+          arduino-cli compile `
+            --fqbn m5stack:esp32:m5stack_atoms3 `
+            --build-property "build.extra_flags=-DUSING_UNIT_NFC" `
+            --output-dir build `
+            atoms3_nfc_reader
+          $merged = Get-ChildItem -Path build -Filter "*.merged.bin" | Select-Object -First 1
+          if ($merged) {
+            Copy-Item $merged.FullName -Destination "build/firmware_merged.bin" -Force
+          }
+
+      - name: Download standalone esptool.exe
+        shell: pwsh
+        run: |
+          Invoke-WebRequest -Uri "https://github.com/espressif/esptool/releases/download/v4.7.0/esptool-v4.7.0-win64.zip" -OutFile esptool.zip
+          Expand-Archive -Path esptool.zip -DestinationPath esptool_tmp -Force
+          $exe = Get-ChildItem -Path esptool_tmp -Recurse -Filter "esptool.exe" | Select-Object -First 1
+          Copy-Item $exe.FullName -Destination "installer/esptool.exe" -Force
+
+      - name: Build Windows & macOS Installer ZIPs
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path dist -Force | Out-Null
+          ./scripts/build_atoms3_package.ps1 -FirmwareRepoDir $PWD -ServerDownloadsDir "$PWD/dist"
+
+      - name: Upload Installer ZIP Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: studyspace-atoms3-installers
+          path: dist/studyspace-atoms3-installer-*.zip
