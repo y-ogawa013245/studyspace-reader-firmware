@@ -35,6 +35,33 @@ struct ToneStep {
     uint16_t durationMs;
 };
 
+// Unit Buzzer (U132) の推奨共振周波数 4000Hz 前後を基準にした各通知音シーケンス定義
+// 1. カード読み取り：短い単音 (4000Hz, 60ms)
+static constexpr ToneStep BUZZER_SEQ_CARD_READ[] = {
+    { 4000, 60 }
+};
+
+// 2. 入室成功：上昇する2音 (3200Hz -> 4000Hz)
+static constexpr ToneStep BUZZER_SEQ_ENTRY_SUCCESS[] = {
+    { 3200, 90 },
+    {    0, 30 },
+    { 4000, 150 }
+};
+
+// 3. 退室成功：下降する2音 (4000Hz -> 3000Hz)
+static constexpr ToneStep BUZZER_SEQ_EXIT_SUCCESS[] = {
+    { 4000, 90 },
+    {    0, 30 },
+    { 3000, 150 }
+};
+
+// 4. 未登録カード・API通信失敗：低い警告音を2回 (1000Hz x 2)
+static constexpr ToneStep BUZZER_SEQ_WARNING_ERROR[] = {
+    { 1000, 140 },
+    {    0, 80  },
+    { 1000, 180 }
+};
+
 class BuzzerNotifier {
 public:
     void begin(uint8_t pin = BUZZER_PIN, uint8_t channel = BUZZER_LEDC_CHANNEL, uint8_t resolutionBits = BUZZER_LEDC_RES_BIT, bool enabled = DEFAULT_BUZZER_ENABLED) {
@@ -84,16 +111,16 @@ public:
         }
         switch (pattern) {
             case SoundPattern::CARD_READ:
-                startSequence(SEQ_CARD_READ, sizeof(SEQ_CARD_READ) / sizeof(ToneStep));
+                startSequence(BUZZER_SEQ_CARD_READ, sizeof(BUZZER_SEQ_CARD_READ) / sizeof(ToneStep));
                 break;
             case SoundPattern::ENTRY_SUCCESS:
-                startSequence(SEQ_ENTRY_SUCCESS, sizeof(SEQ_ENTRY_SUCCESS) / sizeof(ToneStep));
+                startSequence(BUZZER_SEQ_ENTRY_SUCCESS, sizeof(BUZZER_SEQ_ENTRY_SUCCESS) / sizeof(ToneStep));
                 break;
             case SoundPattern::EXIT_SUCCESS:
-                startSequence(SEQ_EXIT_SUCCESS, sizeof(SEQ_EXIT_SUCCESS) / sizeof(ToneStep));
+                startSequence(BUZZER_SEQ_EXIT_SUCCESS, sizeof(BUZZER_SEQ_EXIT_SUCCESS) / sizeof(ToneStep));
                 break;
             case SoundPattern::WARNING_ERROR:
-                startSequence(SEQ_WARNING_ERROR, sizeof(SEQ_WARNING_ERROR) / sizeof(ToneStep));
+                startSequence(BUZZER_SEQ_WARNING_ERROR, sizeof(BUZZER_SEQ_WARNING_ERROR) / sizeof(ToneStep));
                 break;
             default:
                 stop();
@@ -160,33 +187,6 @@ private:
 #endif
         _pwmAttached = true;
     }
-
-    // Unit Buzzer (U132) の推奨共振周波数 4000Hz 前後を基準にした各通知音シーケンス定義
-    // 1. カード読み取り：短い単音 (4000Hz, 60ms)
-    static constexpr ToneStep SEQ_CARD_READ[] = {
-        { 4000, 60 }
-    };
-
-    // 2. 入室成功：上昇する2音 (3200Hz -> 4000Hz)
-    static constexpr ToneStep SEQ_ENTRY_SUCCESS[] = {
-        { 3200, 90 },
-        {    0, 30 },
-        { 4000, 150 }
-    };
-
-    // 3. 退室成功：下降する2音 (4000Hz -> 3000Hz)
-    static constexpr ToneStep SEQ_EXIT_SUCCESS[] = {
-        { 4000, 90 },
-        {    0, 30 },
-        { 3000, 150 }
-    };
-
-    // 4. 未登録カード・API通信失敗：低い警告音を2回 (1000Hz x 2)
-    static constexpr ToneStep SEQ_WARNING_ERROR[] = {
-        { 1000, 140 },
-        {    0, 80  },
-        { 1000, 180 }
-    };
 
     void startSequence(const ToneStep* seq, size_t len) {
         if (seq == nullptr || len == 0) {

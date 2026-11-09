@@ -22,8 +22,7 @@ jobs:
           arduino-cli config add board_manager.additional_urls https://m5stack.oss-cn-shenzhen.aliyuncs.com/resource/arduino/package_m5stack_index.json
           arduino-cli core update-index
           arduino-cli core install m5stack:esp32
-          arduino-cli lib install "M5Unified" "M5UnitUnified"
-          git clone https://github.com/m5stack/M5Unit-NFC.git "$HOME/Documents/Arduino/libraries/M5Unit-NFC"
+          arduino-cli lib install "M5Unified" "M5UnitUnified" "M5Unit-NFC"
 
       - name: Compile ATOMS3 Firmware (.merged.bin)
         shell: pwsh

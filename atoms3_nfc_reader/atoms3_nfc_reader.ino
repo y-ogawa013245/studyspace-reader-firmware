@@ -28,17 +28,16 @@
 #define USING_UNIT_NFC
 #include <M5Unified.h>
 #include <M5UnitUnified.h>
-#include <M5Unit-NFC.h>
+#include <M5UnitUnifiedNFC.h>
 
 #include "config.h"
 #include "buzzer_notifier.h"
 
 // NFC・ハードウェア制御インスタンス（音声通知とは分離）
-m5::UnitUnified Units;
-M5UnitNFC nfcUnit;
-m5::nfc::NFCLayerF nfcF(nfcUnit); // FeliCa (NFC-F: Suica/PASMO/学生証等)
-m5::nfc::NFCLayerA nfcA(nfcUnit); // ISO14443A (NFC-A: MIFARE/NTAG等)
-m5::nfc::PICC picc{};
+m5::unit::UnitUnified Units;
+m5::unit::UnitNFC nfcUnit;
+m5::nfc::NFCLayerF nfcF{nfcUnit}; // FeliCa (NFC-F: Suica/PASMO/学生証等)
+m5::nfc::NFCLayerA nfcA{nfcUnit}; // ISO14443A (NFC-A: MIFARE/NTAG等)
 
 // 非ブロッキング音声通知モジュール (PORT B: Unit Buzzer U132)
 BuzzerNotifier buzzer;
@@ -370,14 +369,17 @@ void startSetupPortal() {
 // Atomic Port ABC Base の PORT A (G38/G39) と 本体側面 PORT A (G2/G1) を順に試行
 // ============================================================================
 bool initNfcUnit() {
+    auto cfg = nfcUnit.config();
+    cfg.mode = m5::nfc::NFC::F;
+    nfcUnit.config(cfg);
+
     // 1. Atomic Port ABC Base (A130) の PORT A (SDA=G38, SCL=G39) を優先試行
     Serial.printf("[NFC] Trying Atomic Port ABC Base PORT A (SDA=G%d, SCL=G%d)...\n", PORTA_BASE_SDA_PIN, PORTA_BASE_SCL_PIN);
     Wire.end();
-    Wire.begin(PORTA_BASE_SDA_PIN, PORTA_BASE_SCL_PIN);
+    Wire.begin(PORTA_BASE_SDA_PIN, PORTA_BASE_SCL_PIN, 400000U);
     Wire.beginTransmission(0x50);
     if (Wire.endTransmission() == 0) {
-        Units.add(nfcUnit, Wire);
-        if (Units.begin()) {
+        if (Units.add(nfcUnit, Wire) && Units.begin()) {
             Serial.println("[OK] ST25R3916 Unit NFC connected on Base PORT A (G38/G39).");
             return true;
         }
@@ -386,11 +388,10 @@ bool initNfcUnit() {
     // 2. 本体側面 Grove ポート (SDA=G2, SCL=G1) へフォールバック試行
     Serial.printf("[NFC] Trying ATOMS3 Lite Side Grove Port (SDA=G%d, SCL=G%d)...\n", PORTA_SIDE_SDA_PIN, PORTA_SIDE_SCL_PIN);
     Wire.end();
-    Wire.begin(PORTA_SIDE_SDA_PIN, PORTA_SIDE_SCL_PIN);
+    Wire.begin(PORTA_SIDE_SDA_PIN, PORTA_SIDE_SCL_PIN, 400000U);
     Wire.beginTransmission(0x50);
     if (Wire.endTransmission() == 0) {
-        Units.add(nfcUnit, Wire);
-        if (Units.begin()) {
+        if (Units.add(nfcUnit, Wire) && Units.begin()) {
             Serial.println("[OK] ST25R3916 Unit NFC connected on Side Grove Port (G2/G1).");
             return true;
         }
@@ -559,25 +560,30 @@ void sendTouchToServer(const String& idm) {
 // NFCカード読み取り処理（音声通知とは分離された純粋なタグ検出関数）
 // ============================================================================
 String pollNfcCardIdm() {
-    char buf[3];
-    String hex = "";
-
     // 1. FeliCa (NFC-F: 学生証・交通系ICカード等) の検出
-    if (nfcF.detect(picc) && picc.uid_len > 0) {
-        for (size_t i = 0; i < picc.uid_len; i++) {
-            snprintf(buf, sizeof(buf), "%02X", picc.uid[i]);
-            hex += buf;
+    if (!nfcUnit.isNFCMode(m5::nfc::NFC::F)) {
+        nfcUnit.configureNFCMode(m5::nfc::NFC::F);
+    }
+    m5::nfc::f::PICC piccF{};
+    if (nfcF.detect(piccF, 80U)) {
+        std::string idmStr = piccF.idmAsString();
+        if (!idmStr.empty()) {
+            return String(idmStr.c_str());
         }
-        return hex;
     }
 
     // 2. NFC-A (MIFARE / NTAG等) のフォールバック検出
-    if (nfcA.detect(picc) && picc.uid_len > 0) {
-        for (size_t i = 0; i < picc.uid_len; i++) {
-            snprintf(buf, sizeof(buf), "%02X", picc.uid[i]);
-            hex += buf;
+    if (nfcUnit.configureNFCMode(m5::nfc::NFC::A)) {
+        m5::nfc::a::PICC piccA{};
+        if (nfcA.detect(piccA, 50U)) {
+            std::string uidStr = piccA.uidAsString();
+            nfcA.deactivate();
+            nfcUnit.configureNFCMode(m5::nfc::NFC::F);
+            if (!uidStr.empty()) {
+                return String(uidStr.c_str());
+            }
         }
-        return hex;
+        nfcUnit.configureNFCMode(m5::nfc::NFC::F);
     }
 
     return "";
