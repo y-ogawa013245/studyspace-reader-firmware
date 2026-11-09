@@ -20,12 +20,12 @@
 #include <Arduino.h>
 #include "config.h"
 
-// 音声通知パターン種別
+// 音声通知パターン種別（※ stdlib.h の EXIT_SUCCESS マクロとの衝突を避けるため _OK 表記）
 enum class SoundPattern {
     NONE = 0,
     CARD_READ,      // カード読み取り：短い単音
-    ENTRY_SUCCESS,  // 入室成功：上昇する2音
-    EXIT_SUCCESS,   // 退室成功：下降する2音
+    ENTRY_OK,       // 入室成功：上昇する2音
+    EXIT_OK,        // 退室成功：下降する2音
     WARNING_ERROR   // 未登録カード・API通信失敗：低い警告音を2回
 };
 
@@ -113,10 +113,10 @@ public:
             case SoundPattern::CARD_READ:
                 startSequence(BUZZER_SEQ_CARD_READ, sizeof(BUZZER_SEQ_CARD_READ) / sizeof(ToneStep));
                 break;
-            case SoundPattern::ENTRY_SUCCESS:
+            case SoundPattern::ENTRY_OK:
                 startSequence(BUZZER_SEQ_ENTRY_SUCCESS, sizeof(BUZZER_SEQ_ENTRY_SUCCESS) / sizeof(ToneStep));
                 break;
-            case SoundPattern::EXIT_SUCCESS:
+            case SoundPattern::EXIT_OK:
                 startSequence(BUZZER_SEQ_EXIT_SUCCESS, sizeof(BUZZER_SEQ_EXIT_SUCCESS) / sizeof(ToneStep));
                 break;
             case SoundPattern::WARNING_ERROR:

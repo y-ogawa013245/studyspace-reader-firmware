@@ -542,11 +542,11 @@ void sendTouchToServer(const String& idm) {
     if (httpCode == 200) {
         if (response.indexOf("\"type\":\"exit\"") >= 0) {
             // 退室成功：下降する2音 ＋ 水色（シアン）非ブロッキング点灯
-            buzzer.play(SoundPattern::EXIT_SUCCESS);
+            buzzer.play(SoundPattern::EXIT_OK);
             showTimedLed(0, 45, 55, 1200);
         } else {
             // 入室成功：上昇する2音 ＋ 緑色非ブロッキング点灯
-            buzzer.play(SoundPattern::ENTRY_SUCCESS);
+            buzzer.play(SoundPattern::ENTRY_OK);
             showTimedLed(0, 60, 0, 1200);
         }
     } else {
