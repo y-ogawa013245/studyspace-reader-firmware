@@ -5,6 +5,9 @@ on:
     branches: [ main ]
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build-installer:
     runs-on: windows-latest
@@ -57,3 +60,18 @@ jobs:
         with:
           name: studyspace-atoms3-installers
           path: dist/studyspace-atoms3-installer-*.zip
+
+      - name: Publish Installer ZIPs to Latest GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          name: Latest ATOMS3 Card Reader Installer
+          body: |
+            StudySpace 単体ICカードリーダー (M5Stack ATOMS3 Lite + ST25R3916 + Unit Buzzer) 用の最新ファームウェア＆簡単インストーラーパッケージです。
+            - **Windows用**: `studyspace-atoms3-installer-win.zip` (`setup.exe`)
+            - **macOS用**: `studyspace-atoms3-installer-mac.zip` (`setup.command`)
+          prerelease: false
+          make_latest: true
+          files: |
+            dist/studyspace-atoms3-installer-win.zip
+            dist/studyspace-atoms3-installer-mac.zip

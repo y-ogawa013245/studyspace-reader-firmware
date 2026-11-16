@@ -1,4 +1,4 @@
-﻿# StudySpace ATOMS3 カードリーダー ワンクリックインストーラー (Windows / macOS) ZIP生成スクリプト
+# StudySpace ATOMS3 カードリーダー ワンクリックインストーラー (Windows / macOS) ZIP生成スクリプト
 param(
     [string]$FirmwareRepoDir = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path,
     [string]$ServerDownloadsDir = (Join-Path (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path "server\public\downloads")
@@ -56,7 +56,9 @@ $readmeText = @"
 
 【Windows での簡単セットアップ手順】
 1. このZIPファイルを右クリックして「すべて展開」で解凍します。
-2. ATOMS3 Lite を USB Type-C ケーブルで PC に接続します。
+2. ATOMS3 Lite を「データ通信対応」の USB Type-C ケーブルで PC に接続します。
+   ※COMポートが認識されない場合（赤く光るだけの場合）は、本体側面（USB端子横）の
+     小さなリセットボタンを「内部の緑色LEDが光るまで（約2秒間）」長押しして離してください。
 3. フォルダ内の「setup.exe」をダブルクリックして起動します。
 4. 画面上で「拠点・設置場所名（例: 那覇校 1F自習室）」と「Wi-FiのSSID/パスワード」を
    入力し、【ATOMS3 にインストール ＆ 初期設定を書き込む】をクリックします。
