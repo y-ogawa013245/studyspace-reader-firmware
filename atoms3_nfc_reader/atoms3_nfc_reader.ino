@@ -410,26 +410,57 @@ bool initNfcUnit() {
 }
 
 // ============================================================================
-// 複数環境Wi-Fi接続（スマホ保存Wi-Fi ＋ config.h の複数リストから自動選択）
+// Wi-Fi接続（保存済みSSIDを最優先で直接接続し、未設定時のみWiFiMultiを使用）
 // ============================================================================
 bool connectToMultiWifi(unsigned long timeoutMs = 15000) {
+    WiFi.disconnect(true);
+    delay(100);
     WiFi.mode(WIFI_STA);
+    // AtomS3 Lite (StampS3) 内蔵3Dアンテナの反射による接続失敗を防ぐ安定化設定
+    WiFi.setTxPower(WIFI_POWER_15dBm);
 
+    // 1. 保存されたSSIDがある場合は WiFiMulti を使わず直接 WiFi.begin() で確実に接続待機
     if (savedSsid.length() > 0) {
-        wifiMulti.addAP(savedSsid.c_str(), savedPass.c_str());
+        Serial.printf("[WIFI] Connecting directly to saved SSID: %s ", savedSsid.c_str());
+        WiFi.begin(savedSsid.c_str(), savedPass.c_str());
+
+        unsigned long start = millis();
+        while (millis() - start < timeoutMs) {
+            checkSerialConfigCommand();
+            if (WiFi.status() == WL_CONNECTED) {
+                Serial.println("\n[WIFI] Connected!");
+                Serial.println("  - Connected SSID : " + WiFi.SSID());
+                Serial.println("  - IP Address     : " + WiFi.localIP().toString());
+                return true;
+            }
+            if (digitalRead(BTN_PIN) == LOW) {
+                Serial.println("\n[BUTTON] Setup mode requested during boot.");
+                return false;
+            }
+            blinkLedStartup(0, 0, 45, 1, 200);
+            Serial.print(".");
+        }
+        Serial.printf("\n[WIFI] Direct connection to '%s' timed out (status=%d).\n", savedSsid.c_str(), (int)WiFi.status());
     }
 
+    // 2. 事前登録リスト（config.h）がある場合のフォールバック
+    bool hasDefaultAp = false;
     for (int i = 0; i < DEFAULT_WIFI_COUNT; i++) {
         if (strlen(DEFAULT_WIFI_LIST[i].ssid) > 0 && String(DEFAULT_WIFI_LIST[i].ssid) != "YOUR_DEV_WIFI") {
             wifiMulti.addAP(DEFAULT_WIFI_LIST[i].ssid, DEFAULT_WIFI_LIST[i].password);
+            hasDefaultAp = true;
         }
     }
 
-    Serial.print("[WIFI] Scanning & connecting to available network ");
+    if (!hasDefaultAp || savedSsid.length() > 0) {
+        return false;
+    }
+
+    Serial.print("[WIFI] Scanning & connecting to default Wi-Fi list ");
     unsigned long start = millis();
     while (millis() - start < timeoutMs) {
         checkSerialConfigCommand();
-        if (wifiMulti.run() == WL_CONNECTED) {
+        if (wifiMulti.run(8000) == WL_CONNECTED) {
             Serial.println("\n[WIFI] Connected!");
             Serial.println("  - Connected SSID : " + WiFi.SSID());
             Serial.println("  - IP Address     : " + WiFi.localIP().toString());
