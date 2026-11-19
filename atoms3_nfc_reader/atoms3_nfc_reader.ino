@@ -106,15 +106,24 @@ void blinkLedStartup(uint8_t r, uint8_t g, uint8_t b, int times, int durationMs)
 }
 
 // ============================================================================
-// デバイスID生成（MACアドレスベース）
+// デバイスID生成（eFuse MACアドレスベース - Wi-Fi初期化前でも確実に固有MACを取得）
 // ============================================================================
 String buildDeviceId() {
     if (strlen(CUSTOM_DEVICE_ID) > 0) {
         return String(CUSTOM_DEVICE_ID);
     }
-    String mac = WiFi.macAddress();
-    mac.replace(":", "");
-    return "ATOMS3_" + mac;
+    uint64_t efuseMac = ESP.getEfuseMac();
+    uint8_t mac[6];
+    mac[0] = (efuseMac >> 0) & 0xFF;
+    mac[1] = (efuseMac >> 8) & 0xFF;
+    mac[2] = (efuseMac >> 16) & 0xFF;
+    mac[3] = (efuseMac >> 24) & 0xFF;
+    mac[4] = (efuseMac >> 32) & 0xFF;
+    mac[5] = (efuseMac >> 40) & 0xFF;
+    char buf[24];
+    snprintf(buf, sizeof(buf), "ATOMS3_%02X%02X%02X%02X%02X%02X",
+             mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+    return String(buf);
 }
 
 // ============================================================================
