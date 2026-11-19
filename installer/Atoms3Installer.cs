@@ -384,6 +384,42 @@ namespace StudySpace
                                 if (!string.IsNullOrEmpty(ssid))
                                 {
                                     txtWifiSsid.Text = ssid;
+                                    DetectWifiPasswordForSsid(ssid);
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            catch { }
+        }
+
+        private void DetectWifiPasswordForSsid(string ssid)
+        {
+            try
+            {
+                ProcessStartInfo psi = new ProcessStartInfo("netsh", "wlan show profile name=\"" + ssid + "\" key=clear")
+                {
+                    RedirectStandardOutput = true,
+                    UseShellExecute = false,
+                    CreateNoWindow = true
+                };
+                using (Process p = Process.Start(psi))
+                {
+                    string output = p.StandardOutput.ReadToEnd();
+                    foreach (string line in output.Split('\n'))
+                    {
+                        string trimmed = line.Trim();
+                        if (trimmed.Contains("主要なコンテンツ") || trimmed.Contains("Key Content"))
+                        {
+                            int idx = trimmed.IndexOf(':');
+                            if (idx > 0)
+                            {
+                                string key = trimmed.Substring(idx + 1).Trim();
+                                if (!string.IsNullOrEmpty(key))
+                                {
+                                    txtWifiPass.Text = key;
                                     break;
                                 }
                             }

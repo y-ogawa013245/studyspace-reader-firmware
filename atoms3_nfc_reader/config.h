@@ -14,11 +14,9 @@ struct WifiCredential {
     const char* password;
 };
 
-// 1. 事前登録Wi-Fiリスト（複数環境対応・WiFiMulti自動判別）
+// 1. 事前登録Wi-Fiリスト（空の場合は setup.exe またはスマホ設定画面で登録したWi-Fiを使用）
 static const WifiCredential DEFAULT_WIFI_LIST[] = {
-    { "StudySpace_Naha",  "password1234" },
-    { "StudySpace_Oroku", "password5678" },
-    { "YOUR_DEV_WIFI",    "your_dev_pass" },
+    { "", "" },
 };
 static const int DEFAULT_WIFI_COUNT = sizeof(DEFAULT_WIFI_LIST) / sizeof(DEFAULT_WIFI_LIST[0]);
 
