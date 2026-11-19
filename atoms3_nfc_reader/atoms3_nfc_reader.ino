@@ -598,33 +598,32 @@ void sendTouchToServer(const String& idm) {
 }
 
 // ============================================================================
-// NFCカード読み取り処理（音声通知とは分離された純粋なタグ検出関数）
+// NFCカード読み取り処理（FeliCa RFキャリア常時ON ＋ 1往復高速SENSF_REQポーリング）
 // ============================================================================
 String pollNfcCardIdm() {
-    // 1. FeliCa (NFC-F: 学生証・交通系ICカード等) の検出
-    if (!nfcUnit.isNFCMode(m5::nfc::NFC::F)) {
-        nfcUnit.configureNFCMode(m5::nfc::NFC::F);
-    }
     m5::nfc::f::PICC piccF{};
-    if (nfcF.detect(piccF, 80U)) {
+
+    // 1. ワイルドカード (0xFFFF: 全FeliCaカード共通) で1往復ポーリング (SENSF_REQ)
+    if (nfcF.polling(piccF, 0xFFFF, m5::nfc::f::RequestCode::None, m5::nfc::f::TimeSlot::Slot4)) {
         std::string idmStr = piccF.idmAsString();
         if (!idmStr.empty()) {
             return String(idmStr.c_str());
         }
     }
 
-    // 2. NFC-A (MIFARE / NTAG等) のフォールバック検出
-    if (nfcUnit.configureNFCMode(m5::nfc::NFC::A)) {
-        m5::nfc::a::PICC piccA{};
-        if (nfcA.detect(piccA, 50U)) {
-            std::string uidStr = piccA.uidAsString();
-            nfcA.deactivate();
-            nfcUnit.configureNFCMode(m5::nfc::NFC::F);
-            if (!uidStr.empty()) {
-                return String(uidStr.c_str());
-            }
+    // 2. 交通系IC (0x0003: Suica/PASMO等) / 共通領域 (0xFE00: Edy/学生証等) でもフォールバックポーリング
+    if (nfcF.polling(piccF, 0x0003, m5::nfc::f::RequestCode::None, m5::nfc::f::TimeSlot::Slot4)) {
+        std::string idmStr = piccF.idmAsString();
+        if (!idmStr.empty()) {
+            return String(idmStr.c_str());
         }
-        nfcUnit.configureNFCMode(m5::nfc::NFC::F);
+    }
+
+    if (nfcF.polling(piccF, 0xFE00, m5::nfc::f::RequestCode::None, m5::nfc::f::TimeSlot::Slot4)) {
+        std::string idmStr = piccF.idmAsString();
+        if (!idmStr.empty()) {
+            return String(idmStr.c_str());
+        }
     }
 
     return "";
