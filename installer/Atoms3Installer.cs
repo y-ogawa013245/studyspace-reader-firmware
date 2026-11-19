@@ -491,51 +491,92 @@ namespace StudySpace
                 string cmdLine = string.Format("STUDYSPACE_SET|{0}|{1}|{2}|{3}|{4}\n",
                     safeTermName, safeSsid, safePass, safeUrl, buzzerOn ? "1" : "0");
 
-                using (SerialPort sp = new SerialPort(portName, 115200))
+                bool ackReceived = false;
+                bool resetPromptShown = false;
+                DateTime overallDeadline = DateTime.Now.AddSeconds(25);
+                string currentTargetPort = portName;
+
+                while (DateTime.Now < overallDeadline && !ackReceived)
                 {
-                    sp.Encoding = Encoding.UTF8;
-                    sp.ReadTimeout = 4000;
-                    sp.WriteTimeout = 4000;
-                    sp.DtrEnable = true;
-                    sp.RtsEnable = true;
-                    sp.Open();
-
-                    Thread.Sleep(300);
-                    sp.DiscardInBuffer();
-                    sp.Write(cmdLine);
-
-                    DateTime deadline = DateTime.Now.AddSeconds(5);
-                    bool ackReceived = false;
-                    while (DateTime.Now < deadline)
+                    // 再起動によりCOMポート番号が変化した場合の自動追従
+                    string[] availablePorts = SerialPort.GetPortNames();
+                    if (availablePorts.Length > 0)
                     {
-                        try
+                        bool exists = false;
+                        foreach (string p in availablePorts)
                         {
-                            string line = sp.ReadLine().Trim();
-                            if (!string.IsNullOrEmpty(line))
+                            if (string.Equals(p, currentTargetPort, StringComparison.OrdinalIgnoreCase))
                             {
-                                AppendLog("[ATOMS3] " + line);
-                                if (line.StartsWith("STUDYSPACE_OK|"))
+                                exists = true;
+                                break;
+                            }
+                        }
+                        if (!exists)
+                        {
+                            Array.Sort(availablePorts);
+                            currentTargetPort = availablePorts[availablePorts.Length - 1];
+                            AppendLog("再起動後のCOMポートを検出: " + currentTargetPort);
+                        }
+                    }
+
+                    try
+                    {
+                        using (SerialPort sp = new SerialPort(currentTargetPort, 115200))
+                        {
+                            sp.Encoding = Encoding.UTF8;
+                            sp.ReadTimeout = 1500;
+                            sp.WriteTimeout = 1500;
+                            sp.DtrEnable = true;
+                            sp.RtsEnable = true;
+                            sp.Open();
+
+                            Thread.Sleep(250);
+                            sp.DiscardInBuffer();
+                            sp.Write(cmdLine);
+
+                            DateTime readDeadline = DateTime.Now.AddSeconds(2.5);
+                            while (DateTime.Now < readDeadline)
+                            {
+                                try
                                 {
-                                    ackReceived = true;
+                                    string line = sp.ReadLine().Trim();
+                                    if (!string.IsNullOrEmpty(line))
+                                    {
+                                        AppendLog("[ATOMS3] " + line);
+                                        if (line.StartsWith("STUDYSPACE_OK|"))
+                                        {
+                                            ackReceived = true;
+                                            break;
+                                        }
+                                    }
+                                }
+                                catch (TimeoutException)
+                                {
                                     break;
                                 }
                             }
+                            sp.Close();
                         }
-                        catch (TimeoutException)
+                    }
+                    catch (Exception)
+                    {
+                        if (!resetPromptShown)
                         {
-                            break;
+                            resetPromptShown = true;
+                            SetProgress(75, "⚠️ ATOMS3 の側面リセットボタンを1回「カチッ」と短押ししてください...");
+                            AppendLog("⚠️ 手動ダウンロードモード(緑LED)で書き込んだ場合、ATOMS3側面のリセットボタンを1回短押しすると通常起動して設定が書き込まれます（待機中...）");
                         }
+                        Thread.Sleep(1000);
                     }
-                    sp.Close();
+                }
 
-                    if (ackReceived)
-                    {
-                        AppendLog("✅ ATOMS3 本体メモリへの設定保存に成功しました！");
-                    }
-                    else
-                    {
-                        AppendLog("ℹ️ 設定コマンドを送信しました（応答待機タイムアウト）。");
-                    }
+                if (ackReceived)
+                {
+                    AppendLog("✅ ATOMS3 本体メモリへの設定保存に成功しました！");
+                }
+                else
+                {
+                    AppendLog("ℹ️ ファームウェア書き込みは完了しています。側面リセットボタンを1回短押ししてから、再度【インストール】を押す（または「ファームウェア本体の書き込み」のチェックを外して押す）と設定のみ高速保存できます。");
                 }
 
                 SetProgress(100, "✅ セットアップ完了！ATOMS3 が自動的にWi-Fiへ接続し稼働開始します。");

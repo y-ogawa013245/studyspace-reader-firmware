@@ -419,6 +419,7 @@ bool connectToMultiWifi(unsigned long timeoutMs = 15000) {
     Serial.print("[WIFI] Scanning & connecting to available network ");
     unsigned long start = millis();
     while (millis() - start < timeoutMs) {
+        checkSerialConfigCommand();
         if (wifiMulti.run() == WL_CONNECTED) {
             Serial.println("\n[WIFI] Connected!");
             Serial.println("  - Connected SSID : " + WiFi.SSID());
@@ -613,6 +614,13 @@ void setup() {
     Serial.println(" Device ID: " + deviceId);
     Serial.println("==========================================");
 
+    // 起動直後の2秒間、PCインストーラー(setup.exe)からのUSBシリアル初期設定コマンドを優先待機
+    unsigned long serialWaitStart = millis();
+    while (millis() - serialWaitStart < 2000) {
+        checkSerialConfigCommand();
+        delay(10);
+    }
+
     // 起動時に本体ボタン(G41)が押されていたら即座にスマホ設定モードへ移行
     if (digitalRead(BTN_PIN) == LOW) {
         startSetupPortal();
@@ -623,14 +631,15 @@ void setup() {
     if (!initNfcUnit()) {
         Serial.println("[ERROR] ST25R3916 Unit NFC (U216) が見つかりません。PORT A のGroveケーブルを確認してください。");
         while (true) {
+            checkSerialConfigCommand();
             if (digitalRead(BTN_PIN) == LOW) {
                 startSetupPortal();
                 return;
             }
             setLedColor(50, 0, 0);
-            delay(300);
+            for (int i = 0; i < 30; i++) { checkSerialConfigCommand(); delay(10); }
             setLedColor(50, 20, 0);
-            delay(300);
+            for (int i = 0; i < 30; i++) { checkSerialConfigCommand(); delay(10); }
         }
     }
 

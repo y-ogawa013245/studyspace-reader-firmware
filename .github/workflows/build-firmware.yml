@@ -32,8 +32,8 @@ jobs:
         run: |
           New-Item -ItemType Directory -Path build -Force | Out-Null
           arduino-cli compile `
-            --fqbn m5stack:esp32:m5stack_atoms3 `
-            --build-property "build.extra_flags=-DUSING_UNIT_NFC" `
+            --fqbn m5stack:esp32:m5stack_atoms3:USBCDCOnBoot=cdc `
+            --build-property "build.extra_flags=-DUSING_UNIT_NFC -DARDUINO_USB_MODE=1 -DARDUINO_USB_CDC_ON_BOOT=1" `
             --output-dir build `
             atoms3_nfc_reader
           $merged = Get-ChildItem -Path build -Filter "*.merged.bin" | Select-Object -First 1

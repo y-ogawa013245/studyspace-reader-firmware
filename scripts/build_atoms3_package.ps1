@@ -1,4 +1,4 @@
-﻿# StudySpace ATOMS3 カードリーダー ワンクリックインストーラー (Windows / macOS) ZIP生成スクリプト
+# StudySpace ATOMS3 カードリーダー ワンクリックインストーラー (Windows / macOS) ZIP生成スクリプト
 param(
     [string]$FirmwareRepoDir = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path,
     [string]$ServerDownloadsDir = (Join-Path (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path "server\public\downloads")
