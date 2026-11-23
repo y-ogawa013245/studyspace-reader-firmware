@@ -91,14 +91,13 @@ public:
      * PCからの診断用：指定したGPIOピンで単発テスト音を鳴らす
      */
     void testPinTone(uint8_t testPin, uint16_t freqHz, uint16_t durationMs) {
-        pinMode(testPin, OUTPUT);
-        digitalWrite(testPin, LOW);
 #if defined(ESP_ARDUINO_VERSION) && (ESP_ARDUINO_VERSION >= ESP_ARDUINO_VERSION_VAL(3, 0, 0))
         ledcAttach(testPin, 4000, _resolutionBits);
         ledcWriteTone(testPin, freqHz);
         delay(durationMs);
         ledcWriteTone(testPin, 0);
         ledcWrite(testPin, 0);
+        ledcDetach(testPin);
 #else
         ledcSetup(2, 4000, _resolutionBits);
         ledcAttachPin(testPin, 2);
@@ -106,7 +105,9 @@ public:
         delay(durationMs);
         ledcWriteTone(2, 0);
         ledcWrite(2, 0);
+        ledcDetachPin(testPin);
 #endif
+        pinMode(testPin, OUTPUT);
         digitalWrite(testPin, LOW);
     }
 

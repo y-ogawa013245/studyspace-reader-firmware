@@ -183,33 +183,31 @@ String escapeJson(const String& input) {
 // ============================================================================
 String pollNfcCardIdm();
 
+bool initNfcUnit();
+
 void runHardwareDiagnostics() {
     Serial.println("\n==========================================");
     Serial.println(" [DIAG] ハードウェア接続＆動作テスト開始");
     Serial.println("==========================================");
 
-    // 1. ブザー鳴動テスト (PORT B: GPIO 8 / GPIO 7, PORT C: GPIO 6 / GPIO 5)
-    Serial.println("[DIAG 1/3] Unit Buzzer 鳴動テスト開始...");
-    const uint8_t testPins[] = { 8, 7, 6, 5 };
-    for (int idx = 0; idx < 4; idx++) {
-        uint8_t p = testPins[idx];
-        int beeps = idx + 1;
-        Serial.printf("  -> Testing GPIO %d (%d回 ピッ と鳴ります)...\n", p, beeps);
-        for (int b = 0; b < beeps; b++) {
-            buzzer.testPinTone(p, 4000, 110);
-            delay(90);
-        }
-        delay(350);
-    }
-    // 通常のデュアルピン(G8+G7)に戻して入室音をテスト再生
+    // 0. 本体設定値の出力
+    String wifiStatStr = (WiFi.status() == WL_CONNECTED)
+        ? ("接続済み (" + WiFi.SSID() + " / IP: " + WiFi.localIP().toString() + ")")
+        : (isSetupPortalMode ? "セットアップモード待機中 (192.168.4.1)" : "未接続");
+    Serial.println("DIAG_ROW|マイコン本体・設定情報|ID: " + deviceId + " / 拠点: " + (terminalName.length() ? terminalName : "(未設定)") + "|O|サーバー: " + serverBaseUrl);
+    Serial.println("DIAG_ROW|Wi-Fi ネットワーク|保存SSID: " + (savedSsid.length() ? savedSsid : "(未設定)") + "|" + ((WiFi.status() == WL_CONNECTED) ? "O" : "-") + "|" + wifiStatStr);
+
+    // 1. ブザー鳴動テスト (PORT B: GPIO 8 + GPIO 7)
+    Serial.println("[DIAG 1/3] Unit Buzzer (PORT B) 鳴動テスト開始...");
     buzzer.begin(BUZZER_PIN, BUZZER_LEDC_CHANNEL, BUZZER_LEDC_RES_BIT, true);
-    Serial.println("  -> Playing ENTRY_OK sound on PORT B (GPIO 8 + GPIO 7)...");
     buzzer.play(SoundPattern::ENTRY_OK);
     unsigned long bStart = millis();
     while (millis() - bStart < 400) {
         buzzer.update();
         delay(5);
     }
+    buzzer.setEnabled(buzzerEnabled);
+    Serial.println(String("DIAG_ROW|Unit Buzzer (PORT B 音声テスト)|PORT B (GPIO 8 / GPIO 7) / 設定: ") + (buzzerEnabled ? "ON(有効)" : "OFF(消音)") + "|O|テスト音（ピロリン♪）を再生しました（音が鳴っていれば配線正常）");
 
     // 2. ST25R3916 (Unit NFC) I2C レジスタ診断（未初期化だった場合はPORT Aで再初期化を試行）
     Serial.println("[DIAG 2/3] ST25R3916 (Unit NFC) I2C レジスタ診断...");
@@ -223,44 +221,64 @@ void runHardwareDiagnostics() {
     uint8_t icId = 0, opCtrl = 0, modeDef = 0;
     Serial.printf("  -> I2C 0x50 ping result: %d (0 = 正常応答)\n", i2cErr);
 
-    // ST25R3916 Space A レジスタ直接読み取り (0x40 | reg)
-    auto readSt25Reg = [](uint8_t reg) -> uint8_t {
-        Wire.beginTransmission(0x50);
-        Wire.write(0x40 | (reg & 0x3F));
-        if (Wire.endTransmission(false) != 0) return 0xFF;
-        if (Wire.requestFrom((uint8_t)0x50, (uint8_t)1) != 1) return 0xFF;
-        return Wire.read();
-    };
-    icId    = readSt25Reg(0x3F); // REG_IC_IDENTITY
-    opCtrl  = readSt25Reg(0x02); // REG_OPERATION_CONTROL
-    modeDef = readSt25Reg(0x03); // REG_MODE_DEFINITION
-    Serial.printf("  -> REG_IC_IDENTITY (0x3F)      : 0x%02X (type=%d, rev=%d) %s\n",
-                  icId, (icId >> 3) & 0x1F, icId & 0x07,
-                  (((icId >> 3) & 0x1F) == 5) ? "[OK: ST25R3916確認]" : "[WARN: チップID不一致]");
-    Serial.printf("  -> REG_OPERATION_CONTROL (0x02): 0x%02X (EN=%d, RX_EN=%d, TX_EN=%d)\n",
-                  opCtrl, (opCtrl >> 7) & 1, (opCtrl >> 6) & 1, (opCtrl >> 3) & 1);
-    Serial.printf("  -> REG_MODE_DEFINITION (0x03)  : 0x%02X\n", modeDef);
+    if (i2cErr == 0) {
+        // ST25R3916 Space A レジスタ直接読み取り (0x40 | reg)
+        auto readSt25Reg = [](uint8_t reg) -> uint8_t {
+            Wire.beginTransmission(0x50);
+            Wire.write(0x40 | (reg & 0x3F));
+            if (Wire.endTransmission(false) != 0) return 0xFF;
+            if (Wire.requestFrom((uint8_t)0x50, (uint8_t)1) != 1) return 0xFF;
+            return Wire.read();
+        };
+        icId    = readSt25Reg(0x3F); // REG_IC_IDENTITY
+        opCtrl  = readSt25Reg(0x02); // REG_OPERATION_CONTROL
+        modeDef = readSt25Reg(0x03); // REG_MODE_DEFINITION
+        bool chipOk = (((icId >> 3) & 0x1F) == 5);
+        bool rfOk   = (((opCtrl >> 7) & 1) == 1) && (((opCtrl >> 3) & 1) == 1);
+
+        Serial.printf("  -> REG_IC_IDENTITY (0x3F)      : 0x%02X (type=%d, rev=%d) %s\n",
+                      icId, (icId >> 3) & 0x1F, icId & 0x07,
+                      chipOk ? "[OK: ST25R3916確認]" : "[WARN: チップID不一致]");
+        Serial.printf("  -> REG_OPERATION_CONTROL (0x02): 0x%02X (EN=%d, RX_EN=%d, TX_EN=%d)\n",
+                      opCtrl, (opCtrl >> 7) & 1, (opCtrl >> 6) & 1, (opCtrl >> 3) & 1);
+        Serial.printf("  -> REG_MODE_DEFINITION (0x03)  : 0x%02X\n", modeDef);
+
+        Serial.println("DIAG_ROW|拡張ベース PORT A ＆ NFC通信|I2C 0x50 (SDA=G38, SCL=G39)|" + String(chipOk ? "O" : "X") + "|ST25R3916 チップ応答確認 (ID=0x" + String(icId, HEX) + ")");
+        Serial.println("DIAG_ROW|NFC アンテナ電波出力 (13.56MHz)|FeliCa (NFC-F) モード / OP_CTRL=0x" + String(opCtrl, HEX) + "|" + String(rfOk ? "O" : "X") + "|" + (rfOk ? "RFキャリア送受信 ON (EN=1, RX=1, TX=1)" : "アンテナ出力がOFFになっています"));
+    } else {
+        Serial.println("DIAG_ROW|拡張ベース PORT A ＆ NFC通信|I2C 0x50 (SDA=G38, SCL=G39)|X|応答なし (エラーコード=" + String(i2cErr) + ")。拡張ベースとPORT Aの赤いケーブルを奥まで挿し直してください");
+        Serial.println("DIAG_ROW|NFC アンテナ電波出力 (13.56MHz)|FeliCa (NFC-F) モード|X|NFCリーダー未接続のため電波出力なし");
+    }
 
     // 3. 8秒間のカードかざしライブテスト
     Serial.println("[DIAG 3/3] 8秒間カード読み取りテスト中... 今すぐリーダーにICカードをかざしてください！");
     unsigned long scanStart = millis();
     bool cardFound = false;
     while (millis() - scanStart < 8000) {
-        Units.update();
-        String idm = pollNfcCardIdm();
-        if (idm.length() > 0) {
-            Serial.println("  ✅ [DIAG CARD DETECTED!] IDm/UID = " + idm);
-            buzzer.play(SoundPattern::ENTRY_OK);
-            unsigned long tWait = millis();
-            while (millis() - tWait < 350) { buzzer.update(); delay(5); }
-            cardFound = true;
-            break;
+        if (i2cErr == 0) {
+            Units.update();
+            String idm = pollNfcCardIdm();
+            if (idm.length() > 0) {
+                Serial.println("  ✅ [DIAG CARD DETECTED!] IDm/UID = " + idm);
+                Serial.println("DIAG_ROW|ICカードかざし読取テスト|待機時間: 最大8秒 (FeliCa 0xFFFF/0x0003/0xFE00)|O|カード読取成功！ IDm: " + idm);
+                buzzer.play(SoundPattern::ENTRY_OK);
+                unsigned long tWait = millis();
+                while (millis() - tWait < 350) { buzzer.update(); delay(5); }
+                cardFound = true;
+                break;
+            }
         }
         delay(20);
     }
     if (!cardFound) {
-        Serial.println("  ℹ️ 8秒間以内にカードが検出されませんでした。");
+        if (i2cErr == 0) {
+            Serial.println("  ℹ️ 8秒間以内にカードが検出されませんでした。");
+            Serial.println("DIAG_ROW|ICカードかざし読取テスト|待機時間: 8秒間|X|時間内にカードが検出されませんでした（テスト中にかざすと◯になります）");
+        } else {
+            Serial.println("DIAG_ROW|ICカードかざし読取テスト|待機時間: 8秒間|X|NFCリーダー未接続のためスキップ");
+        }
     }
+    Serial.println("DIAG_DONE");
     Serial.println("==========================================");
     Serial.println(" [DIAG] ハードウェア診断完了");
     Serial.println("==========================================\n");

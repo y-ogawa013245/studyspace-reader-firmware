@@ -484,72 +484,9 @@ namespace StudySpace
                 return;
             }
             string selectedPort = cmbPort.SelectedItem.ToString();
-            btnInstall.Enabled = false;
-            btnDiag.Enabled = false;
-            Thread worker = new Thread(() => RunDiagSequence(selectedPort));
-            worker.IsBackground = true;
-            worker.Start();
-        }
-
-        private void RunDiagSequence(string portName)
-        {
-            try
+            using (Atoms3DiagForm diagForm = new Atoms3DiagForm(selectedPort, this.Icon, AppendLog))
             {
-                SetProgress(30, "ハードウェア診断テスト中（ブザー音が鳴り、8秒間カードタッチを待機します）...");
-                AppendLog("=== ハードウェア診断テスト開始 (" + portName + ") ===");
-                using (SerialPort sp = new SerialPort(portName, 115200))
-                {
-                    sp.Encoding = Encoding.UTF8;
-                    sp.ReadTimeout = 1000;
-                    sp.WriteTimeout = 1500;
-                    sp.DtrEnable = true;
-                    sp.RtsEnable = true;
-                    sp.Open();
-
-                    Thread.Sleep(250);
-                    sp.DiscardInBuffer();
-                    sp.Write("STUDYSPACE_DIAG\n");
-
-                    DateTime deadline = DateTime.Now.AddSeconds(13);
-                    while (DateTime.Now < deadline)
-                    {
-                        try
-                        {
-                            string line = sp.ReadLine().Trim();
-                            if (!string.IsNullOrEmpty(line))
-                            {
-                                AppendLog("[DIAG] " + line);
-                                if (line.Contains("Card Scan Timeout") || line.Contains("CARD DETECTED"))
-                                {
-                                    // 少し残りの出力を読んで終了
-                                    DateTime tail = DateTime.Now.AddMilliseconds(600);
-                                    while (DateTime.Now < tail)
-                                    {
-                                        try
-                                        {
-                                            string tLine = sp.ReadLine().Trim();
-                                            if (!string.IsNullOrEmpty(tLine)) AppendLog("[DIAG] " + tLine);
-                                        }
-                                        catch { break; }
-                                    }
-                                    break;
-                                }
-                            }
-                        }
-                        catch (TimeoutException) { }
-                    }
-                    sp.Close();
-                }
-                SetProgress(100, "✅ ハードウェア診断テスト完了（ログ欄を確認してください）");
-            }
-            catch (Exception ex)
-            {
-                AppendLog("[ERROR] 診断テスト失敗: " + ex.Message);
-                SetProgress(0, "診断テストエラー: " + ex.Message);
-            }
-            finally
-            {
-                EnableInstallButton();
+                diagForm.ShowDialog(this);
             }
         }
 
@@ -742,6 +679,325 @@ namespace StudySpace
             }
             btnInstall.Enabled = true;
             btnDiag.Enabled = true;
+        }
+    }
+
+    public class Atoms3DiagForm : Form
+    {
+        private string portName;
+        private Action<string> parentLog;
+        private Label lblHeader;
+        private Label lblGuide;
+        private DataGridView grid;
+        private Button btnRerun;
+        private Button btnClose;
+        private bool isRunning = false;
+
+        public Atoms3DiagForm(string port, Icon appIcon, Action<string> logCallback)
+        {
+            this.portName = port;
+            this.parentLog = logCallback;
+            this.Text = "ハードウェア診断テスト結果 (" + portName + ")";
+            this.Size = new Size(860, 470);
+            this.StartPosition = FormStartPosition.CenterParent;
+            this.FormBorderStyle = FormBorderStyle.FixedDialog;
+            this.MaximizeBox = false;
+            this.MinimizeBox = false;
+            this.BackColor = Color.FromArgb(248, 250, 252);
+            if (appIcon != null)
+            {
+                try { this.Icon = appIcon; } catch { }
+            }
+
+            lblHeader = new Label
+            {
+                Text = "🔊 ATOMS3 ハードウェア診断テスト (" + portName + ")",
+                Font = new Font("Meiryo UI", 12f, FontStyle.Bold),
+                ForeColor = Color.FromArgb(15, 23, 42),
+                Location = new Point(20, 16),
+                Size = new Size(800, 26)
+            };
+            this.Controls.Add(lblHeader);
+
+            lblGuide = new Label
+            {
+                Text = "⏳ 診断テストを実行中です... ブザー音が鳴ったあと、8秒以内にICカードをリーダーにかざしてください。",
+                Font = new Font("Meiryo UI", 9.5f, FontStyle.Bold),
+                ForeColor = Color.FromArgb(37, 99, 235),
+                Location = new Point(20, 46),
+                Size = new Size(800, 24)
+            };
+            this.Controls.Add(lblGuide);
+
+            grid = new DataGridView
+            {
+                Location = new Point(20, 78),
+                Size = new Size(804, 286),
+                AllowUserToAddRows = false,
+                AllowUserToDeleteRows = false,
+                AllowUserToResizeRows = false,
+                ReadOnly = true,
+                RowHeadersVisible = false,
+                SelectionMode = DataGridViewSelectionMode.FullRowSelect,
+                BackgroundColor = Color.White,
+                BorderStyle = BorderStyle.FixedSingle,
+                AutoSizeRowsMode = DataGridViewAutoSizeRowsMode.AllCells,
+                Font = new Font("Meiryo UI", 9.5f)
+            };
+            grid.ColumnHeadersDefaultCellStyle.Font = new Font("Meiryo UI", 9.5f, FontStyle.Bold);
+            grid.ColumnHeadersDefaultCellStyle.BackColor = Color.FromArgb(241, 245, 249);
+            grid.ColumnHeadersDefaultCellStyle.ForeColor = Color.FromArgb(30, 41, 59);
+            grid.ColumnHeadersHeight = 34;
+            grid.EnableHeadersVisualStyles = false;
+            grid.DefaultCellStyle.WrapMode = DataGridViewTriState.True;
+            grid.DefaultCellStyle.Padding = new Padding(6, 6, 6, 6);
+
+            DataGridViewTextBoxColumn colTest = new DataGridViewTextBoxColumn
+            {
+                HeaderText = "テスト項目",
+                Width = 195
+            };
+            DataGridViewTextBoxColumn colVal = new DataGridViewTextBoxColumn
+            {
+                HeaderText = "使用・設定されている値",
+                Width = 235
+            };
+            DataGridViewTextBoxColumn colRes = new DataGridViewTextBoxColumn
+            {
+                HeaderText = "結果",
+                Width = 68
+            };
+            colRes.DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleCenter;
+            colRes.DefaultCellStyle.Font = new Font("Meiryo UI", 12f, FontStyle.Bold);
+
+            DataGridViewTextBoxColumn colDetail = new DataGridViewTextBoxColumn
+            {
+                HeaderText = "結果詳細（成功 / 失敗理由）",
+                Width = 300
+            };
+
+            grid.Columns.AddRange(new DataGridViewColumn[] { colTest, colVal, colRes, colDetail });
+            this.Controls.Add(grid);
+
+            btnRerun = new Button
+            {
+                Text = "🔄 もう一度テストを実行する",
+                Font = new Font("Meiryo UI", 9.5f, FontStyle.Bold),
+                BackColor = Color.FromArgb(59, 130, 246),
+                ForeColor = Color.White,
+                FlatStyle = FlatStyle.Flat,
+                Location = new Point(20, 376),
+                Size = new Size(240, 40),
+                Cursor = Cursors.Hand,
+                Enabled = false
+            };
+            btnRerun.FlatAppearance.BorderSize = 0;
+            btnRerun.Click += (s, e) => StartDiagnosis();
+            this.Controls.Add(btnRerun);
+
+            btnClose = new Button
+            {
+                Text = "閉じる",
+                Font = new Font("Meiryo UI", 9.5f),
+                BackColor = Color.FromArgb(226, 232, 240),
+                ForeColor = Color.FromArgb(30, 41, 59),
+                FlatStyle = FlatStyle.Flat,
+                Location = new Point(704, 376),
+                Size = new Size(120, 40),
+                Cursor = Cursors.Hand
+            };
+            btnClose.FlatAppearance.BorderSize = 0;
+            btnClose.Click += (s, e) => this.Close();
+            this.Controls.Add(btnClose);
+
+            this.Shown += (s, e) => StartDiagnosis();
+        }
+
+        private void AddOrUpdateRow(string testName, string usedValue, string symbol, string detail)
+        {
+            if (this.InvokeRequired)
+            {
+                this.BeginInvoke(new Action<string, string, string, string>(AddOrUpdateRow), testName, usedValue, symbol, detail);
+                return;
+            }
+
+            string dispSymbol = symbol == "O" ? "◯" : (symbol == "X" ? "☓" : "ー");
+            int targetIdx = -1;
+            for (int i = 0; i < grid.Rows.Count; i++)
+            {
+                if (Convert.ToString(grid.Rows[i].Cells[0].Value) == testName)
+                {
+                    targetIdx = i;
+                    break;
+                }
+            }
+
+            if (targetIdx >= 0)
+            {
+                grid.Rows[targetIdx].Cells[1].Value = usedValue;
+                grid.Rows[targetIdx].Cells[2].Value = dispSymbol;
+                grid.Rows[targetIdx].Cells[3].Value = detail;
+            }
+            else
+            {
+                targetIdx = grid.Rows.Add(testName, usedValue, dispSymbol, detail);
+            }
+
+            DataGridViewCell resCell = grid.Rows[targetIdx].Cells[2];
+            if (dispSymbol == "◯")
+            {
+                resCell.Style.ForeColor = Color.FromArgb(22, 163, 74);
+                resCell.Style.BackColor = Color.FromArgb(240, 253, 244);
+            }
+            else if (dispSymbol == "☓")
+            {
+                resCell.Style.ForeColor = Color.FromArgb(220, 38, 38);
+                resCell.Style.BackColor = Color.FromArgb(254, 242, 242);
+            }
+            else
+            {
+                resCell.Style.ForeColor = Color.FromArgb(100, 116, 139);
+                resCell.Style.BackColor = Color.FromArgb(248, 250, 252);
+            }
+            grid.ClearSelection();
+        }
+
+        private void SetGuideStatus(string text, Color color, bool enableRerun)
+        {
+            if (this.InvokeRequired)
+            {
+                this.BeginInvoke(new Action<string, Color, bool>(SetGuideStatus), text, color, enableRerun);
+                return;
+            }
+            lblGuide.Text = text;
+            lblGuide.ForeColor = color;
+            btnRerun.Enabled = enableRerun;
+        }
+
+        private void StartDiagnosis()
+        {
+            if (isRunning) return;
+            isRunning = true;
+            grid.Rows.Clear();
+            SetGuideStatus("⏳ 診断中... ブザー音が鳴ったあと、8秒以内にICカードをリーダーにかざしてください！", Color.FromArgb(37, 99, 235), false);
+
+            AddOrUpdateRow("USB シリアル通信", "ポート: " + portName + " (115200bps)", "-", "接続確認中...");
+            AddOrUpdateRow("マイコン本体・設定情報", "取得中...", "-", "待機中...");
+            AddOrUpdateRow("Wi-Fi ネットワーク", "取得中...", "-", "待機中...");
+            AddOrUpdateRow("Unit Buzzer (PORT B 音声テスト)", "PORT B (GPIO 8 / GPIO 7)", "-", "テスト音再生待機中...");
+            AddOrUpdateRow("拡張ベース PORT A ＆ NFC通信", "I2C 0x50 (SDA=G38, SCL=G39)", "-", "診断待機中...");
+            AddOrUpdateRow("NFC アンテナ電波出力 (13.56MHz)", "FeliCa (NFC-F) モード", "-", "診断待機中...");
+            AddOrUpdateRow("ICカードかざし読取テスト", "待機時間: 8秒間", "-", "⏳ 今すぐリーダーにICカードをかざしてください...");
+
+            Thread worker = new Thread(RunWorker);
+            worker.IsBackground = true;
+            worker.Start();
+        }
+
+        private void RunWorker()
+        {
+            bool anyDiagRowReceived = false;
+            try
+            {
+                using (SerialPort sp = new SerialPort(portName, 115200))
+                {
+                    sp.Encoding = Encoding.UTF8;
+                    sp.ReadTimeout = 1000;
+                    sp.WriteTimeout = 1500;
+                    sp.DtrEnable = true;
+                    sp.RtsEnable = true;
+                    sp.Open();
+
+                    AddOrUpdateRow("USB シリアル通信", "ポート: " + portName + " (115200bps)", "O", "マイコンとのUSBシリアル通信に成功しました");
+
+                    Thread.Sleep(250);
+                    sp.DiscardInBuffer();
+                    sp.Write("STUDYSPACE_DIAG\n");
+
+                    DateTime deadline = DateTime.Now.AddSeconds(13);
+                    while (DateTime.Now < deadline)
+                    {
+                        try
+                        {
+                            string line = sp.ReadLine().Trim();
+                            if (string.IsNullOrEmpty(line)) continue;
+
+                            if (parentLog != null) parentLog("[DIAG] " + line);
+
+                            if (line.StartsWith("DIAG_ROW|"))
+                            {
+                                anyDiagRowReceived = true;
+                                string[] parts = line.Split('|');
+                                if (parts.Length >= 5)
+                                {
+                                    AddOrUpdateRow(parts[1], parts[2], parts[3], parts[4]);
+                                }
+                            }
+                            else if (line == "DIAG_DONE")
+                            {
+                                break;
+                            }
+                            // 旧フォーマットのファームウェアとも互換動作させるパーサー
+                            else if (line.Contains("Playing ENTRY_OK sound"))
+                            {
+                                AddOrUpdateRow("Unit Buzzer (PORT B 音声テスト)", "PORT B (GPIO 8 / GPIO 7)", "O", "テスト音（ピロリン♪）を再生しました");
+                            }
+                            else if (line.Contains("I2C 0x50 ping result:"))
+                            {
+                                bool i2cOk = line.Contains("result: 0");
+                                if (!i2cOk)
+                                {
+                                    AddOrUpdateRow("拡張ベース PORT A ＆ NFC通信", "I2C 0x50 (SDA=G38, SCL=G39)", "X", "NFCリーダーから応答がありません。PORT Aの赤いケーブルを確認してください");
+                                    AddOrUpdateRow("NFC アンテナ電波出力 (13.56MHz)", "FeliCa (NFC-F) モード", "X", "NFCリーダー未接続");
+                                }
+                            }
+                            else if (line.Contains("REG_IC_IDENTITY"))
+                            {
+                                bool ok = line.Contains("[OK:");
+                                AddOrUpdateRow("拡張ベース PORT A ＆ NFC通信", "I2C 0x50 (SDA=G38, SCL=G39)", ok ? "O" : "X", ok ? "ST25R3916 チップ正常応答 (" + line + ")" : "チップ応答異常 (" + line + ")");
+                            }
+                            else if (line.Contains("REG_OPERATION_CONTROL"))
+                            {
+                                bool ok = line.Contains("EN=1, RX_EN=1, TX_EN=1");
+                                AddOrUpdateRow("NFC アンテナ電波出力 (13.56MHz)", "FeliCa (NFC-F) モード", ok ? "O" : "X", ok ? "RFキャリア送受信 ON (" + line + ")" : "RFキャリア出力OFF (" + line + ")");
+                            }
+                            else if (line.Contains("[DIAG CARD DETECTED!]"))
+                            {
+                                int idx = line.IndexOf("=");
+                                string idm = idx > 0 ? line.Substring(idx + 1).Trim() : line;
+                                AddOrUpdateRow("ICカードかざし読取テスト", "待機時間: 最大8秒", "O", "カード読取成功！ IDm: " + idm);
+                            }
+                            else if (line.Contains("8秒間以内にカードが検出されませんでした"))
+                            {
+                                AddOrUpdateRow("ICカードかざし読取テスト", "待機時間: 8秒間", "X", "8秒以内にカードがかざされませんでした（テスト中にかざすと◯になります）");
+                            }
+                            else if (line.Contains("ハードウェア診断完了"))
+                            {
+                                break;
+                            }
+                        }
+                        catch (TimeoutException) { }
+                    }
+                    sp.Close();
+                }
+
+                if (!anyDiagRowReceived)
+                {
+                    AddOrUpdateRow("マイコン本体・設定情報", "USB接続: " + portName, "O", "接続確認済み（※最新ファームウェアに更新すると拠点名やSSIDも表示されます）");
+                    AddOrUpdateRow("Wi-Fi ネットワーク", "本体メモリ設定", "-", "（※最新ファームウェアに更新するとWi-Fi状態も一覧表示されます）");
+                }
+
+                SetGuideStatus("✅ 診断テストが完了しました。もう一度テストする場合は左下のボタンを押してください。", Color.FromArgb(22, 163, 74), true);
+            }
+            catch (Exception ex)
+            {
+                AddOrUpdateRow("USB シリアル通信", "ポート: " + portName, "X", "通信エラー: " + ex.Message);
+                SetGuideStatus("❌ 通信エラーが発生しました: " + ex.Message, Color.FromArgb(220, 38, 38), true);
+            }
+            finally
+            {
+                isRunning = false;
+            }
         }
     }
 }
