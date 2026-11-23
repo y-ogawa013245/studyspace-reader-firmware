@@ -25,6 +25,7 @@ namespace StudySpace
         private ProgressBar pBar;
         private Label lblStatus;
         private TextBox txtLog;
+        private Button btnDiag;
         private Button btnInstall;
         private Button btnClose;
 
@@ -72,7 +73,7 @@ namespace StudySpace
         private void InitializeUI()
         {
             this.Text = "StudySpace ATOMS3 カードリーダー インストーラー";
-            this.Size = new Size(560, 650);
+            this.Size = new Size(560, 700);
             this.StartPosition = FormStartPosition.CenterScreen;
             this.FormBorderStyle = FormBorderStyle.FixedDialog;
             this.MaximizeBox = false;
@@ -281,10 +282,27 @@ namespace StudySpace
                 BackColor = Color.FromArgb(15, 23, 42),
                 ForeColor = Color.FromArgb(226, 232, 240),
                 Location = new Point(24, y),
-                Size = new Size(496, 100)
+                Size = new Size(496, 110)
             };
             this.Controls.Add(txtLog);
-            y += 112;
+            y += 118;
+
+            // ハードウェア診断テストボタン
+            btnDiag = new Button
+            {
+                Text = "🔊 ハードウェア診断テスト（ブザー音・拡張ベース・NFCカード読取確認）",
+                Font = new Font("Meiryo UI", 9.5f, FontStyle.Bold),
+                BackColor = Color.FromArgb(59, 130, 246),
+                ForeColor = Color.White,
+                FlatStyle = FlatStyle.Flat,
+                Location = new Point(24, y),
+                Size = new Size(496, 36),
+                Cursor = Cursors.Hand
+            };
+            btnDiag.FlatAppearance.BorderSize = 0;
+            btnDiag.Click += OnDiagClick;
+            this.Controls.Add(btnDiag);
+            y += 44;
 
             // 実行ボタン
             btnInstall = new Button
@@ -452,9 +470,87 @@ namespace StudySpace
             bool doFlash = chkFlashFirmware.Checked;
 
             btnInstall.Enabled = false;
+            btnDiag.Enabled = false;
             Thread worker = new Thread(() => RunInstallSequence(selectedPort, termName, ssid, pass, serverUrl, buzzerOn, doFlash));
             worker.IsBackground = true;
             worker.Start();
+        }
+
+        private void OnDiagClick(object sender, EventArgs e)
+        {
+            if (cmbPort.SelectedItem == null)
+            {
+                MessageBox.Show("ATOMS3 Lite が接続されているCOMポートを選択してください。", "ポート未選択", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+            string selectedPort = cmbPort.SelectedItem.ToString();
+            btnInstall.Enabled = false;
+            btnDiag.Enabled = false;
+            Thread worker = new Thread(() => RunDiagSequence(selectedPort));
+            worker.IsBackground = true;
+            worker.Start();
+        }
+
+        private void RunDiagSequence(string portName)
+        {
+            try
+            {
+                SetProgress(30, "ハードウェア診断テスト中（ブザー音が鳴り、8秒間カードタッチを待機します）...");
+                AppendLog("=== ハードウェア診断テスト開始 (" + portName + ") ===");
+                using (SerialPort sp = new SerialPort(portName, 115200))
+                {
+                    sp.Encoding = Encoding.UTF8;
+                    sp.ReadTimeout = 1000;
+                    sp.WriteTimeout = 1500;
+                    sp.DtrEnable = true;
+                    sp.RtsEnable = true;
+                    sp.Open();
+
+                    Thread.Sleep(250);
+                    sp.DiscardInBuffer();
+                    sp.Write("STUDYSPACE_DIAG\n");
+
+                    DateTime deadline = DateTime.Now.AddSeconds(13);
+                    while (DateTime.Now < deadline)
+                    {
+                        try
+                        {
+                            string line = sp.ReadLine().Trim();
+                            if (!string.IsNullOrEmpty(line))
+                            {
+                                AppendLog("[DIAG] " + line);
+                                if (line.Contains("Card Scan Timeout") || line.Contains("CARD DETECTED"))
+                                {
+                                    // 少し残りの出力を読んで終了
+                                    DateTime tail = DateTime.Now.AddMilliseconds(600);
+                                    while (DateTime.Now < tail)
+                                    {
+                                        try
+                                        {
+                                            string tLine = sp.ReadLine().Trim();
+                                            if (!string.IsNullOrEmpty(tLine)) AppendLog("[DIAG] " + tLine);
+                                        }
+                                        catch { break; }
+                                    }
+                                    break;
+                                }
+                            }
+                        }
+                        catch (TimeoutException) { }
+                    }
+                    sp.Close();
+                }
+                SetProgress(100, "✅ ハードウェア診断テスト完了（ログ欄を確認してください）");
+            }
+            catch (Exception ex)
+            {
+                AppendLog("[ERROR] 診断テスト失敗: " + ex.Message);
+                SetProgress(0, "診断テストエラー: " + ex.Message);
+            }
+            finally
+            {
+                EnableInstallButton();
+            }
         }
 
         private void RunInstallSequence(string portName, string termName, string ssid, string pass, string serverUrl, bool buzzerOn, bool doFlash)
@@ -645,6 +741,7 @@ namespace StudySpace
                 return;
             }
             btnInstall.Enabled = true;
+            btnDiag.Enabled = true;
         }
     }
 }

@@ -64,6 +64,12 @@ bool isSetupPortalMode = false;
 String lastIdm = "";
 unsigned long lastTouchTime = 0;
 
+// スマホ・PCリアルタイムモニター用ステート
+String uiLastIdm = "";
+String uiLastResult = "待機中（ICカードをかざすとここにリアルタイム表示されます）";
+unsigned long uiTouchSeq = 0;
+String nfcPortStatus = "未初期化";
+
 // 非ブロッキングLED状態管理
 unsigned long ledHoldUntilMs = 0;
 bool ledHolding = false;
@@ -318,8 +324,33 @@ void checkSerialConfigCommand() {
 }
 
 // ============================================================================
-// スマホ・PC向け Web設定モード（Captive Portal: http://192.168.4.1）
+// スマホ・PC向け Web設定＆リアルタイムテスト画面（http://192.168.4.1）
 // ============================================================================
+void handleApiStatus() {
+    String wifiState = (WiFi.status() == WL_CONNECTED)
+        ? ("接続中 (" + WiFi.SSID() + " / " + WiFi.localIP().toString() + ")")
+        : "設定モード待機中 (192.168.4.1)";
+    String json = "{";
+    json += "\"device_id\":\"" + escapeJson(deviceId) + "\",";
+    json += "\"terminal_name\":\"" + escapeJson(terminalName) + "\",";
+    json += "\"nfc_status\":\"" + escapeJson(nfcPortStatus) + "\",";
+    json += "\"wifi_status\":\"" + escapeJson(wifiState) + "\",";
+    json += "\"last_idm\":\"" + escapeJson(uiLastIdm) + "\",";
+    json += "\"last_result\":\"" + escapeJson(uiLastResult) + "\",";
+    json += "\"touch_seq\":" + String(uiTouchSeq);
+    json += "}";
+    webServer.send(200, "application/json; charset=utf-8", json);
+}
+
+void handleApiTestBuzzer() {
+    buzzer.begin(BUZZER_PIN, BUZZER_LEDC_CHANNEL, BUZZER_LEDC_RES_BIT, true);
+    buzzer.play(SoundPattern::ENTRY_OK);
+    showTimedLed(0, 60, 0, 800);
+    uiLastResult = "🔊 ブザーテスト音（ピロリ♪）を再生しました";
+    uiTouchSeq++;
+    webServer.send(200, "application/json; charset=utf-8", "{\"status\":\"ok\"}");
+}
+
 void handlePortalRoot() {
     int n = WiFi.scanNetworks();
     String ssidOptions = "";
@@ -336,55 +367,96 @@ void handlePortalRoot() {
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>StudySpace リーダー設定</title>
+<title>StudySpace リーダー設定＆テスト</title>
 <style>
-  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #0f172a; color: #f8fafc; margin: 0; padding: 20px; }
-  .card { max-width: 440px; margin: 0 auto; background: #1e293b; border-radius: 14px; padding: 24px; box-shadow: 0 10px 25px rgba(0,0,0,0.4); border: 1px solid rgba(56,189,248,0.25); }
-  h1 { font-size: 1.25rem; margin: 0 0 6px; color: #38bdf8; }
-  .sub { font-size: 0.82rem; color: #94a3b8; margin-bottom: 20px; line-height: 1.5; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #0f172a; color: #f8fafc; margin: 0; padding: 16px; }
+  .card { max-width: 460px; margin: 0 auto 16px; background: #1e293b; border-radius: 14px; padding: 20px; box-shadow: 0 10px 25px rgba(0,0,0,0.4); border: 1px solid rgba(56,189,248,0.25); }
+  h1 { font-size: 1.2rem; margin: 0 0 6px; color: #38bdf8; }
+  h2 { font-size: 1.05rem; margin: 0 0 10px; color: #34d399; }
+  .sub { font-size: 0.8rem; color: #94a3b8; margin-bottom: 14px; line-height: 1.5; }
   label { display: block; font-size: 0.84rem; font-weight: 600; color: #cbd5e1; margin: 14px 0 6px; }
   input, select { width: 100%; box-sizing: border-box; padding: 11px 12px; border-radius: 8px; border: 1px solid #334155; background: #0f172a; color: #fff; font-size: 0.95rem; }
-  .hint { font-size: 0.76rem; color: #64748b; margin-top: 4px; }
-  button { width: 100%; margin-top: 22px; padding: 13px; border: none; border-radius: 10px; background: linear-gradient(135deg, #10b981, #059669); color: #fff; font-size: 1rem; font-weight: 700; cursor: pointer; }
-  .badge { display: inline-block; background: rgba(56,189,248,0.15); color: #38bdf8; padding: 4px 10px; border-radius: 6px; font-family: monospace; font-size: 0.8rem; margin-bottom: 12px; }
+  .hint { font-size: 0.75rem; color: #64748b; margin-top: 4px; }
+  button { width: 100%; margin-top: 18px; padding: 13px; border: none; border-radius: 10px; background: linear-gradient(135deg, #10b981, #059669); color: #fff; font-size: 0.98rem; font-weight: 700; cursor: pointer; }
+  .btn-test { margin-top: 10px; padding: 10px; background: linear-gradient(135deg, #0284c7, #2563eb); font-size: 0.9rem; }
+  .badge { display: inline-block; background: rgba(56,189,248,0.15); color: #38bdf8; padding: 4px 10px; border-radius: 6px; font-family: monospace; font-size: 0.8rem; margin-bottom: 10px; }
+  .mon-row { display: flex; justify-content: space-between; font-size: 0.82rem; padding: 6px 0; border-bottom: 1px solid rgba(255,255,255,0.06); }
+  .mon-box { margin-top: 10px; padding: 12px; border-radius: 10px; background: #0f172a; border: 1px solid rgba(52,211,153,0.4); }
+  .idm-val { font-family: monospace; font-size: 1.05rem; font-weight: 700; color: #38bdf8; margin: 4px 0; }
 </style>
 </head>
 <body>
+<div class="card" style="border-color: rgba(16,185,129,0.4);">
+  <h2>📡 リアルタイム動作モニター ＆ テスト</h2>
+  <div class="mon-row"><span>NFCリーダー (PORT A):</span><strong id="st_nfc" style="color:#34d399;">)rawliteral" + escapeHtml(nfcPortStatus) + R"rawliteral(</strong></div>
+  <div class="mon-row"><span>ネットワーク状態:</span><strong id="st_wifi" style="color:#cbd5e1;">確認中...</strong></div>
+  <div class="mon-box" id="touch_box">
+    <div style="font-size:0.75rem;color:#94a3b8;">直近に検知したICカード (リアルタイム更新):</div>
+    <div class="idm-val" id="st_idm">--- (カードをタッチしてください) ---</div>
+    <div style="font-size:0.82rem;color:#34d399;" id="st_res">)rawliteral" + escapeHtml(uiLastResult) + R"rawliteral(</div>
+  </div>
+  <button type="button" class="btn-test" onclick="testBuzzer()">🔊 スマホからブザーテスト音を鳴らす</button>
+</div>
+
 <div class="card">
   <div class="badge">ID: )rawliteral" + escapeHtml(deviceId) + R"rawliteral(</div>
   <h1>StudySpace カードリーダー設定</h1>
-  <p class="sub">設置する拠点名（校舎・教室名）とWi-Fi・接続先サーバーを設定します。保存すると本体メモリに記憶され、サーバーへ拠点名が自動登録されます。</p>
+  <p class="sub">設置する拠点名（校舎・教室名）と2.4GHz帯Wi-Fiを設定します。</p>
 
   <form method="POST" action="/save">
     <label>① 拠点・設置場所名（所属名）</label>
-    <input type="text" name="term_name" value=")rawliteral" + escapeHtml(terminalName) + R"rawliteral(" placeholder="例: 那覇校 1F自習室 / 小禄校 受付" required>
-    <div class="hint">※ここで入力した名前がマスターPCの管理画面＆打刻ログの所属名として登録されます。</div>
+    <input type="text" name="term_name" value=")rawliteral" + escapeHtml(terminalName) + R"rawliteral(" placeholder="例: 那覇校 1F自習室 / StudySpace長田校" required>
 
-    <label>② Wi-Fi SSID（周囲の電波から選択 または 手入力）</label>
+    <label>② Wi-Fi SSID（検出された2.4GHz電波から選択 または 手入力）</label>
     <select onchange="if(this.value) document.getElementById('ssid_input').value=this.value;">
-      <option value="">▼ 検出されたWi-Fiから選ぶ...</option>
+      <option value="">▼ 検出された2.4GHz Wi-Fiから選ぶ...</option>
       )rawliteral" + ssidOptions + R"rawliteral(
     </select>
     <input type="text" id="ssid_input" name="ssid" value=")rawliteral" + escapeHtml(savedSsid) + R"rawliteral(" placeholder="Wi-FiのSSIDを入力（2.4GHz帯）" style="margin-top:8px;">
-    <div class="hint">※空欄のままにした場合は config.h に事前登録されたWi-Fiリストを使用します。</div>
+    <div class="hint">※ATOMS3は2.4GHz帯（-g 等）のみ対応です。上のプルダウンに出ているSSIDを選ぶと確実です。</div>
 
     <label>③ Wi-Fi パスワード</label>
     <input type="password" name="pass" value=")rawliteral" + escapeHtml(savedPass) + R"rawliteral(" placeholder="Wi-Fiパスワードを入力">
 
     <label>④ 接続先サーバーURL</label>
     <input type="url" name="server_url" value=")rawliteral" + escapeHtml(serverBaseUrl) + R"rawliteral(" placeholder="https://entry.studyspace.okinawa" required>
-    <div class="hint">本番例: https://entry.studyspace.okinawa ／ テスト例: http://192.168.1.10:8000</div>
 
     <label>⑤ 音声通知（Unit Buzzer の有無）</label>
     <select name="buzzer_on">
       <option value="1" )rawliteral" + String(buzzerEnabled ? "selected" : "") + R"rawliteral(>有効（Unit Buzzer で音を鳴らす）</option>
       <option value="0" )rawliteral" + String(!buzzerEnabled ? "selected" : "") + R"rawliteral(>無効（ブザー未装着・LEDのみで稼働）</option>
     </select>
-    <div class="hint">※ブザーを繋がない拠点や、静かな自習室で消音にしたい場合は「無効」を選択してください。</div>
 
     <button type="submit">設定を保存して再起動</button>
   </form>
 </div>
+<script>
+let lastSeq = -1;
+async function pollStatus() {
+  try {
+    const r = await fetch('/status', {cache:'no-store'});
+    if (!r.ok) return;
+    const d = await r.json();
+    document.getElementById('st_nfc').textContent = d.nfc_status || 'OK';
+    document.getElementById('st_wifi').textContent = d.wifi_status || '';
+    if (d.last_idm) {
+      document.getElementById('st_idm').textContent = 'IDm: ' + d.last_idm;
+    }
+    document.getElementById('st_res').textContent = d.last_result || '';
+    if (lastSeq !== -1 && d.touch_seq !== lastSeq) {
+      const box = document.getElementById('touch_box');
+      box.style.background = 'rgba(16,185,129,0.25)';
+      setTimeout(() => { box.style.background = '#0f172a'; }, 700);
+    }
+    lastSeq = d.touch_seq;
+  } catch (e) {}
+}
+async function testBuzzer() {
+  try { await fetch('/test-buzzer', {method:'POST'}); pollStatus(); } catch (e) {}
+}
+setInterval(pollStatus, 800);
+pollStatus();
+</script>
 </body>
 </html>)rawliteral";
 
@@ -445,6 +517,8 @@ void startSetupPortal() {
     dnsServer.start(53, "*", apIp);
 
     webServer.on("/", HTTP_GET, handlePortalRoot);
+    webServer.on("/status", HTTP_GET, handleApiStatus);
+    webServer.on("/test-buzzer", HTTP_POST, handleApiTestBuzzer);
     webServer.on("/save", HTTP_POST, handlePortalSave);
     webServer.onNotFound([]() {
         webServer.sendHeader("Location", String("http://") + WiFi.softAPIP().toString(), true);
@@ -491,11 +565,13 @@ bool initNfcUnit() {
         if (Wire.endTransmission() == 0) {
             if (Units.add(nfcUnit, Wire) && Units.begin()) {
                 Serial.printf("[OK] ST25R3916 Unit NFC connected on %s.\n", labels[i]);
+                nfcPortStatus = String("✅ 正常接続 (") + labels[i] + ")";
                 return true;
             }
         }
     }
 
+    nfcPortStatus = "❌ 未検出 (PORT A配線を確認してください)";
     return false;
 }
 
@@ -675,16 +751,24 @@ void sendTouchToServer(const String& idm) {
             // 退室成功：下降する2音 ＋ 水色（シアン）非ブロッキング点灯
             buzzer.play(SoundPattern::EXIT_OK);
             showTimedLed(0, 45, 55, 1200);
+            uiLastResult = "✅ 退室打刻成功 (サーバー記録完了)";
         } else {
             // 入室成功：上昇する2音 ＋ 緑色非ブロッキング点灯
             buzzer.play(SoundPattern::ENTRY_OK);
             showTimedLed(0, 60, 0, 1200);
+            uiLastResult = "✅ 入室打刻成功 (サーバー記録完了)";
         }
-    } else {
-        // 未登録カード(404) / 停止中端末(403) / API通信失敗：低い警告音を2回 ＋ 赤色非ブロッキング点灯
+    } else if (httpCode == 404) {
         buzzer.play(SoundPattern::WARNING_ERROR);
         showTimedLed(60, 0, 0, 1000);
+        uiLastResult = "⚠️ 未登録のカードです (管理画面の新規会員登録で自動入力されます)";
+    } else {
+        // 停止中端末(403) / API通信失敗：低い警告音を2回 ＋ 赤色非ブロッキング点灯
+        buzzer.play(SoundPattern::WARNING_ERROR);
+        showTimedLed(60, 0, 0, 1000);
+        uiLastResult = "⚠️ サーバー通信エラー (HTTP " + String(httpCode) + ")";
     }
+    uiTouchSeq++;
 }
 
 // ============================================================================
@@ -787,6 +871,13 @@ void setup() {
 
     setIdleLed();
 
+    // 通常Wi-Fi接続中も同一LAN内のスマホ・PCから http://<IPアドレス> でリアルタイムモニターを開けるようWebサーバーを起動
+    webServer.on("/", HTTP_GET, handlePortalRoot);
+    webServer.on("/status", HTTP_GET, handleApiStatus);
+    webServer.on("/test-buzzer", HTTP_POST, handleApiTestBuzzer);
+    webServer.on("/save", HTTP_POST, handlePortalSave);
+    webServer.begin();
+
     // 4. サーバーへ起動Ping＆拠点名を送信
     sendPingToServer();
 }
@@ -802,11 +893,11 @@ void loop() {
     // PCのワンクリックインストーラー(setup.exe)からのUSBシリアル初期設定コマンドを監視
     checkSerialConfigCommand();
 
-    // スマホWeb設定モード中の場合もWebサーバー処理を回しつつ、カード読み取り＆ブザーテストも継続実行する
+    // スマホWeb設定モード中・通常Wi-Fi稼働中ともにWebモニターリクエストを処理
     if (isSetupPortalMode) {
         dnsServer.processNextRequest();
-        webServer.handleClient();
     }
+    webServer.handleClient();
 
     Units.update();
 
@@ -849,10 +940,14 @@ void loop() {
             }
 
             Serial.println("[CARD DETECTED] IDm/UID: " + detectedIdm);
+            uiLastIdm = detectedIdm;
+            uiTouchSeq++;
             if (!isSetupPortalMode && WiFi.status() == WL_CONNECTED) {
+                uiLastResult = "⏳ サーバーへ打刻通信中...";
                 sendTouchToServer(detectedIdm);
             } else {
                 // オフライン・設定モード中もテスト用に成功音と緑LEDで反応させる
+                uiLastResult = "✅ カード読取テスト成功 (オフライン/設定モード中)";
                 buzzer.play(SoundPattern::ENTRY_OK);
                 showTimedLed(0, 60, 0, 1000);
             }

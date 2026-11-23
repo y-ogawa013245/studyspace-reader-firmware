@@ -25,6 +25,38 @@ PORT=$(echo "$PORTS" | head -n 1)
 echo "✅ 検出されたUSBポート: $PORT"
 echo ""
 
+echo "実行メニューを選択してください:"
+echo "  [1] 初期設定・ファームウェアのインストール (通常セットアップ)"
+echo "  [2] ハードウェア診断テストのみ実行 (ブザー音・拡張ベース・NFCカード読取確認)"
+read -p "選択 [1/2] (デフォルト: 1): " MODE_SELECT
+echo ""
+
+if [ "$MODE_SELECT" = "2" ]; then
+  echo "⏳ ハードウェア診断テストを実行しています（ブザー音が鳴り、8秒間カードタッチを待機します）..."
+  python3 -m pip install --quiet pyserial 2>/dev/null
+  python3 - <<EOF
+import time
+import serial
+with serial.Serial("$PORT", 115200, timeout=1) as ser:
+    time.sleep(0.3)
+    ser.reset_input_buffer()
+    ser.write(b"STUDYSPACE_DIAG\n")
+    deadline = time.time() + 12
+    while time.time() < deadline:
+        line = ser.readline().decode("utf-8", errors="ignore").strip()
+        if line:
+            print("[DIAG]", line)
+            if "Card Scan Timeout" in line or "CARD DETECTED" in line:
+                time.sleep(0.5)
+                while ser.in_waiting:
+                    print("[DIAG]", ser.readline().decode("utf-8", errors="ignore").strip())
+                break
+EOF
+  echo ""
+  read -p "Enterキーで終了..."
+  exit 0
+fi
+
 read -p "① 拠点・設置場所名を入力 (例: 那覇校 1F自習室): " TERM_NAME
 if [ -z "$TERM_NAME" ]; then
   TERM_NAME="StudySpace リーダー"
