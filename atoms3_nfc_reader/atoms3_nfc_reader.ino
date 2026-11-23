@@ -211,11 +211,16 @@ void runHardwareDiagnostics() {
         delay(5);
     }
 
-    // 2. ST25R3916 (Unit NFC) I2C レジスタ診断
+    // 2. ST25R3916 (Unit NFC) I2C レジスタ診断（未初期化だった場合はPORT Aで再初期化を試行）
     Serial.println("[DIAG 2/3] ST25R3916 (Unit NFC) I2C レジスタ診断...");
-    uint8_t icId = 0, opCtrl = 0, modeDef = 0;
     Wire.beginTransmission(0x50);
     uint8_t i2cErr = Wire.endTransmission();
+    if (i2cErr != 0) {
+        initNfcUnit();
+        Wire.beginTransmission(0x50);
+        i2cErr = Wire.endTransmission();
+    }
+    uint8_t icId = 0, opCtrl = 0, modeDef = 0;
     Serial.printf("  -> I2C 0x50 ping result: %d (0 = 正常応答)\n", i2cErr);
 
     // ST25R3916 Space A レジスタ直接読み取り (0x40 | reg)
@@ -536,30 +541,47 @@ void startSetupPortal() {
 }
 
 // ============================================================================
-// PORT A (I2C) 自動検出＆ST25R3916 (Unit NFC) 初期化
-// Atomic Port ABC Base の PORT A (G38/G39) と 本体側面 PORT A (G2/G1) を順に試行
+// PORT A (I2C) バスロック解除＆ST25R3916 (Unit NFC) 自動初期化
+// ソフトリセット直後などに ST25R3916 が SDA を握ったままの場合に SCL クロック9発で解放する
 // ============================================================================
+void recoverI2cBus(int sdaPin, int sclPin) {
+    pinMode(sdaPin, INPUT_PULLUP);
+    pinMode(sclPin, OUTPUT);
+    for (int c = 0; c < 12; c++) {
+        digitalWrite(sclPin, LOW);
+        delayMicroseconds(10);
+        digitalWrite(sclPin, HIGH);
+        delayMicroseconds(10);
+    }
+    // STOP コンディション生成
+    pinMode(sdaPin, OUTPUT);
+    digitalWrite(sdaPin, LOW);
+    delayMicroseconds(10);
+    digitalWrite(sclPin, HIGH);
+    delayMicroseconds(10);
+    digitalWrite(sdaPin, HIGH);
+    delayMicroseconds(10);
+}
+
 bool initNfcUnit() {
     auto cfg = nfcUnit.config();
     cfg.mode = m5::nfc::NFC::F;
     cfg.vdd_voltage_5V = true; // Grove PORT A は 5V 給電
     nfcUnit.config(cfg);
 
-    // 候補ピンペアを順番にスキャン:
-    // 1. Atomic Port ABC Base PORT A 標準 (SDA=G38, SCL=G39)
-    // 2. Atomic Port ABC Base PORT A 反転 (SDA=G39, SCL=G38)
-    // 3. ATOMS3 Lite 本体側面 Grove (SDA=G2, SCL=G1)
-    const int sdaCandidates[] = { PORTA_BASE_SDA_PIN, PORTA_BASE_SCL_PIN, PORTA_SIDE_SDA_PIN };
-    const int sclCandidates[] = { PORTA_BASE_SCL_PIN, PORTA_BASE_SDA_PIN, PORTA_SIDE_SCL_PIN };
+    // Atomic Port ABC Base PORT A 標準 (SDA=G38, SCL=G39) と 本体側面 Grove (SDA=G2, SCL=G1)
+    const int sdaCandidates[] = { PORTA_BASE_SDA_PIN, PORTA_SIDE_SDA_PIN };
+    const int sclCandidates[] = { PORTA_BASE_SCL_PIN, PORTA_SIDE_SCL_PIN };
     const char* labels[] = {
         "Atomic Port ABC Base PORT A (SDA=G38, SCL=G39)",
-        "Atomic Port ABC Base PORT A Swapped (SDA=G39, SCL=G38)",
         "ATOMS3 Lite Side Grove Port (SDA=G2, SCL=G1)"
     };
 
-    for (int i = 0; i < 3; i++) {
+    for (int i = 0; i < 2; i++) {
         Serial.printf("[NFC] Trying %s...\n", labels[i]);
         Wire.end();
+        recoverI2cBus(sdaCandidates[i], sclCandidates[i]);
+        delay(20);
         Wire.begin(sdaCandidates[i], sclCandidates[i], 400000U);
         Wire.beginTransmission(0x50);
         if (Wire.endTransmission() == 0) {
@@ -571,6 +593,10 @@ bool initNfcUnit() {
         }
     }
 
+    // 最後に PORT A 標準 (G38/G39) に戻しておく（後で再接続された際に即検出できるようにする）
+    Wire.end();
+    recoverI2cBus(PORTA_BASE_SDA_PIN, PORTA_BASE_SCL_PIN);
+    Wire.begin(PORTA_BASE_SDA_PIN, PORTA_BASE_SCL_PIN, 400000U);
     nfcPortStatus = "❌ 未検出 (PORT A配線を確認してください)";
     return false;
 }
@@ -846,19 +872,19 @@ void setup() {
         return;
     }
 
-    // 2. PORT A: ST25R3916 (Unit NFC) の初期化
-    if (!initNfcUnit()) {
-        Serial.println("[ERROR] ST25R3916 Unit NFC (U216) が見つかりません。PORT A のGroveケーブルを確認してください。");
-        while (true) {
+    // 2. PORT A: ST25R3916 (Unit NFC) の初期化（赤・オレンジ点滅中も毎周期自動リトライし、繋がれば自動で通常起動へ進む）
+    while (!initNfcUnit()) {
+        Serial.println("[ERROR] ST25R3916 Unit NFC (U216) が見つかりません。自動再接続を試行中...");
+        for (int cycle = 0; cycle < 3; cycle++) {
             checkSerialConfigCommand();
             if (digitalRead(BTN_PIN) == LOW) {
                 startSetupPortal();
                 return;
             }
             setLedColor(50, 0, 0);
-            for (int i = 0; i < 30; i++) { checkSerialConfigCommand(); delay(10); }
+            for (int i = 0; i < 25; i++) { checkSerialConfigCommand(); delay(10); }
             setLedColor(50, 20, 0);
-            for (int i = 0; i < 30; i++) { checkSerialConfigCommand(); delay(10); }
+            for (int i = 0; i < 25; i++) { checkSerialConfigCommand(); delay(10); }
         }
     }
 
