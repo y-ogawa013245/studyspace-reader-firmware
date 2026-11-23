@@ -170,6 +170,92 @@ String escapeJson(const String& input) {
 }
 
 // ============================================================================
+// PCからのハードウェア一括診断コマンド (STUDYSPACE_DIAG / STUDYSPACE_TEST)
+// 1. ブザー (PORT B/C: GPIO 8, 7, 6, 5) の鳴動テスト
+// 2. 拡張ベース PORT A & ST25R3916 (Unit NFC) のI2Cレジスタ・RF電波状態診断
+// 3. 10秒間のリアルタイムNFCカード読み取りテスト (FeliCa NFC-F & ISO14443A NFC-A)
+// ============================================================================
+String pollNfcCardIdm();
+
+void runHardwareDiagnostics() {
+    Serial.println("\n==========================================");
+    Serial.println(" [DIAG] ハードウェア接続＆動作テスト開始");
+    Serial.println("==========================================");
+
+    // 1. ブザー鳴動テスト (PORT B: GPIO 8 / GPIO 7, PORT C: GPIO 6 / GPIO 5)
+    Serial.println("[DIAG 1/3] Unit Buzzer 鳴動テスト開始...");
+    const uint8_t testPins[] = { 8, 7, 6, 5 };
+    for (int idx = 0; idx < 4; idx++) {
+        uint8_t p = testPins[idx];
+        int beeps = idx + 1;
+        Serial.printf("  -> Testing GPIO %d (%d回 ピッ と鳴ります)...\n", p, beeps);
+        for (int b = 0; b < beeps; b++) {
+            buzzer.testPinTone(p, 4000, 110);
+            delay(90);
+        }
+        delay(350);
+    }
+    // 通常のデュアルピン(G8+G7)に戻して入室音をテスト再生
+    buzzer.begin(BUZZER_PIN, BUZZER_LEDC_CHANNEL, BUZZER_LEDC_RES_BIT, true);
+    Serial.println("  -> Playing ENTRY_OK sound on PORT B (GPIO 8 + GPIO 7)...");
+    buzzer.play(SoundPattern::ENTRY_OK);
+    unsigned long bStart = millis();
+    while (millis() - bStart < 400) {
+        buzzer.update();
+        delay(5);
+    }
+
+    // 2. ST25R3916 (Unit NFC) I2C レジスタ診断
+    Serial.println("[DIAG 2/3] ST25R3916 (Unit NFC) I2C レジスタ診断...");
+    uint8_t icId = 0, opCtrl = 0, modeDef = 0;
+    Wire.beginTransmission(0x50);
+    uint8_t i2cErr = Wire.endTransmission();
+    Serial.printf("  -> I2C 0x50 ping result: %d (0 = 正常応答)\n", i2cErr);
+
+    // ST25R3916 Space A レジスタ直接読み取り (0x40 | reg)
+    auto readSt25Reg = [](uint8_t reg) -> uint8_t {
+        Wire.beginTransmission(0x50);
+        Wire.write(0x40 | (reg & 0x3F));
+        if (Wire.endTransmission(false) != 0) return 0xFF;
+        if (Wire.requestFrom((uint8_t)0x50, (uint8_t)1) != 1) return 0xFF;
+        return Wire.read();
+    };
+    icId    = readSt25Reg(0x3F); // REG_IC_IDENTITY
+    opCtrl  = readSt25Reg(0x02); // REG_OPERATION_CONTROL
+    modeDef = readSt25Reg(0x03); // REG_MODE_DEFINITION
+    Serial.printf("  -> REG_IC_IDENTITY (0x3F)      : 0x%02X (type=%d, rev=%d) %s\n",
+                  icId, (icId >> 3) & 0x1F, icId & 0x07,
+                  (((icId >> 3) & 0x1F) == 5) ? "[OK: ST25R3916確認]" : "[WARN: チップID不一致]");
+    Serial.printf("  -> REG_OPERATION_CONTROL (0x02): 0x%02X (EN=%d, RX_EN=%d, TX_EN=%d)\n",
+                  opCtrl, (opCtrl >> 7) & 1, (opCtrl >> 6) & 1, (opCtrl >> 3) & 1);
+    Serial.printf("  -> REG_MODE_DEFINITION (0x03)  : 0x%02X\n", modeDef);
+
+    // 3. 8秒間のカードかざしライブテスト
+    Serial.println("[DIAG 3/3] 8秒間カード読み取りテスト中... 今すぐリーダーにICカードをかざしてください！");
+    unsigned long scanStart = millis();
+    bool cardFound = false;
+    while (millis() - scanStart < 8000) {
+        Units.update();
+        String idm = pollNfcCardIdm();
+        if (idm.length() > 0) {
+            Serial.println("  ✅ [DIAG CARD DETECTED!] IDm/UID = " + idm);
+            buzzer.play(SoundPattern::ENTRY_OK);
+            unsigned long tWait = millis();
+            while (millis() - tWait < 350) { buzzer.update(); delay(5); }
+            cardFound = true;
+            break;
+        }
+        delay(20);
+    }
+    if (!cardFound) {
+        Serial.println("  ℹ️ 8秒間以内にカードが検出されませんでした。");
+    }
+    Serial.println("==========================================");
+    Serial.println(" [DIAG] ハードウェア診断完了");
+    Serial.println("==========================================\n");
+}
+
+// ============================================================================
 // USBシリアル経由での初期設定コマンド受信 (PCインストーラー setup.exe / setup.command 連携用)
 // フォーマット: STUDYSPACE_SET|<term_name>|<ssid>|<pass>|<server_url>|<buzzer_on(1/0)>
 // ============================================================================
@@ -181,6 +267,8 @@ void checkSerialConfigCommand() {
     if (!line.startsWith("STUDYSPACE_SET|")) {
         if (line == "STUDYSPACE_INFO") {
             Serial.println("STUDYSPACE_READY|" + deviceId + "|" + terminalName + "|" + serverBaseUrl);
+        } else if (line == "STUDYSPACE_DIAG" || line == "STUDYSPACE_TEST") {
+            runHardwareDiagnostics();
         }
         return;
     }
@@ -380,29 +468,31 @@ void startSetupPortal() {
 bool initNfcUnit() {
     auto cfg = nfcUnit.config();
     cfg.mode = m5::nfc::NFC::F;
+    cfg.vdd_voltage_5V = true; // Grove PORT A は 5V 給電
     nfcUnit.config(cfg);
 
-    // 1. Atomic Port ABC Base (A130) の PORT A (SDA=G38, SCL=G39) を優先試行
-    Serial.printf("[NFC] Trying Atomic Port ABC Base PORT A (SDA=G%d, SCL=G%d)...\n", PORTA_BASE_SDA_PIN, PORTA_BASE_SCL_PIN);
-    Wire.end();
-    Wire.begin(PORTA_BASE_SDA_PIN, PORTA_BASE_SCL_PIN, 400000U);
-    Wire.beginTransmission(0x50);
-    if (Wire.endTransmission() == 0) {
-        if (Units.add(nfcUnit, Wire) && Units.begin()) {
-            Serial.println("[OK] ST25R3916 Unit NFC connected on Base PORT A (G38/G39).");
-            return true;
-        }
-    }
+    // 候補ピンペアを順番にスキャン:
+    // 1. Atomic Port ABC Base PORT A 標準 (SDA=G38, SCL=G39)
+    // 2. Atomic Port ABC Base PORT A 反転 (SDA=G39, SCL=G38)
+    // 3. ATOMS3 Lite 本体側面 Grove (SDA=G2, SCL=G1)
+    const int sdaCandidates[] = { PORTA_BASE_SDA_PIN, PORTA_BASE_SCL_PIN, PORTA_SIDE_SDA_PIN };
+    const int sclCandidates[] = { PORTA_BASE_SCL_PIN, PORTA_BASE_SDA_PIN, PORTA_SIDE_SCL_PIN };
+    const char* labels[] = {
+        "Atomic Port ABC Base PORT A (SDA=G38, SCL=G39)",
+        "Atomic Port ABC Base PORT A Swapped (SDA=G39, SCL=G38)",
+        "ATOMS3 Lite Side Grove Port (SDA=G2, SCL=G1)"
+    };
 
-    // 2. 本体側面 Grove ポート (SDA=G2, SCL=G1) へフォールバック試行
-    Serial.printf("[NFC] Trying ATOMS3 Lite Side Grove Port (SDA=G%d, SCL=G%d)...\n", PORTA_SIDE_SDA_PIN, PORTA_SIDE_SCL_PIN);
-    Wire.end();
-    Wire.begin(PORTA_SIDE_SDA_PIN, PORTA_SIDE_SCL_PIN, 400000U);
-    Wire.beginTransmission(0x50);
-    if (Wire.endTransmission() == 0) {
-        if (Units.add(nfcUnit, Wire) && Units.begin()) {
-            Serial.println("[OK] ST25R3916 Unit NFC connected on Side Grove Port (G2/G1).");
-            return true;
+    for (int i = 0; i < 3; i++) {
+        Serial.printf("[NFC] Trying %s...\n", labels[i]);
+        Wire.end();
+        Wire.begin(sdaCandidates[i], sclCandidates[i], 400000U);
+        Wire.beginTransmission(0x50);
+        if (Wire.endTransmission() == 0) {
+            if (Units.add(nfcUnit, Wire) && Units.begin()) {
+                Serial.printf("[OK] ST25R3916 Unit NFC connected on %s.\n", labels[i]);
+                return true;
+            }
         }
     }
 
@@ -634,7 +724,13 @@ String pollNfcCardIdm() {
 // ============================================================================
 void setup() {
     auto cfg = M5.config();
+    cfg.internal_imu = false;
+    cfg.external_imu = false;
+    cfg.internal_rtc = false;
+    cfg.external_rtc = false;
     M5.begin(cfg);
+    M5.In_I2C.release();
+    M5.Ex_I2C.release();
     Serial.begin(115200);
     delay(200);
 
@@ -706,18 +802,15 @@ void loop() {
     // PCのワンクリックインストーラー(setup.exe)からのUSBシリアル初期設定コマンドを監視
     checkSerialConfigCommand();
 
-    // スマホWeb設定モード中の場合はWebサーバー処理のみ実行
+    // スマホWeb設定モード中の場合もWebサーバー処理を回しつつ、カード読み取り＆ブザーテストも継続実行する
     if (isSetupPortalMode) {
         dnsServer.processNextRequest();
         webServer.handleClient();
-        delay(2);
-        return;
     }
 
-    M5.update();
     Units.update();
 
-    // 本体ボタン(G41)の短押し（Ping送信） / 2秒長押し（スマホ設定モード起動）判定
+    // 本体ボタン(G41)の短押し（ブザー鳴動＆Ping送信） / 2秒長押し（スマホ設定モード起動）判定
     if (digitalRead(BTN_PIN) == LOW) {
         unsigned long pressStart = millis();
         while (digitalRead(BTN_PIN) == LOW) {
@@ -730,7 +823,7 @@ void loop() {
             delay(10);
         }
         if (millis() - pressStart > 50) {
-            Serial.println("[BUTTON] Short press -> Sending manual ping...");
+            Serial.println("[BUTTON] Short press -> Testing buzzer & sending manual ping...");
             buzzer.play(SoundPattern::CARD_READ);
             sendPingToServer();
         }
@@ -756,7 +849,13 @@ void loop() {
             }
 
             Serial.println("[CARD DETECTED] IDm/UID: " + detectedIdm);
-            sendTouchToServer(detectedIdm);
+            if (!isSetupPortalMode && WiFi.status() == WL_CONNECTED) {
+                sendTouchToServer(detectedIdm);
+            } else {
+                // オフライン・設定モード中もテスト用に成功音と緑LEDで反応させる
+                buzzer.play(SoundPattern::ENTRY_OK);
+                showTimedLed(0, 60, 0, 1000);
+            }
         }
     }
 

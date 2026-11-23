@@ -66,6 +66,7 @@ class BuzzerNotifier {
 public:
     void begin(uint8_t pin = BUZZER_PIN, uint8_t channel = BUZZER_LEDC_CHANNEL, uint8_t resolutionBits = BUZZER_LEDC_RES_BIT, bool enabled = DEFAULT_BUZZER_ENABLED) {
         _pin = pin;
+        _pin2 = (pin == 8) ? 7 : 8; // Atomic Port ABC Base PORT B の両信号線 (G8 / G7) を同時駆動して極性不一致を防止
         _channel = channel;
         _resolutionBits = resolutionBits;
         _enabled = enabled;
@@ -73,6 +74,8 @@ public:
         // 初期状態で直流HIGHにならないよう確実にLOW出力で初期化
         pinMode(_pin, OUTPUT);
         digitalWrite(_pin, LOW);
+        pinMode(_pin2, OUTPUT);
+        digitalWrite(_pin2, LOW);
 
         if (_enabled) {
             attachPwm();
@@ -82,6 +85,29 @@ public:
         _currentSequence = nullptr;
         _sequenceLength = 0;
         _stepIndex = 0;
+    }
+
+    /**
+     * PCからの診断用：指定したGPIOピンで単発テスト音を鳴らす
+     */
+    void testPinTone(uint8_t testPin, uint16_t freqHz, uint16_t durationMs) {
+        pinMode(testPin, OUTPUT);
+        digitalWrite(testPin, LOW);
+#if defined(ESP_ARDUINO_VERSION) && (ESP_ARDUINO_VERSION >= ESP_ARDUINO_VERSION_VAL(3, 0, 0))
+        ledcAttach(testPin, 4000, _resolutionBits);
+        ledcWriteTone(testPin, freqHz);
+        delay(durationMs);
+        ledcWriteTone(testPin, 0);
+        ledcWrite(testPin, 0);
+#else
+        ledcSetup(2, 4000, _resolutionBits);
+        ledcAttachPin(testPin, 2);
+        ledcWriteTone(2, freqHz);
+        delay(durationMs);
+        ledcWriteTone(2, 0);
+        ledcWrite(2, 0);
+#endif
+        digitalWrite(testPin, LOW);
     }
 
     /**
@@ -165,6 +191,7 @@ public:
 
 private:
     uint8_t _pin = BUZZER_PIN;
+    uint8_t _pin2 = 7;
     uint8_t _channel = BUZZER_LEDC_CHANNEL;
     uint8_t _resolutionBits = BUZZER_LEDC_RES_BIT;
     bool _enabled = DEFAULT_BUZZER_ENABLED;
@@ -180,9 +207,12 @@ private:
 #if defined(ESP_ARDUINO_VERSION) && (ESP_ARDUINO_VERSION >= ESP_ARDUINO_VERSION_VAL(3, 0, 0))
         ledcAttach(_pin, 4000, _resolutionBits);
         ledcWrite(_pin, 0);
+        ledcAttach(_pin2, 4000, _resolutionBits);
+        ledcWrite(_pin2, 0);
 #else
         ledcSetup(_channel, 4000, _resolutionBits);
         ledcAttachPin(_pin, _channel);
+        ledcAttachPin(_pin2, _channel);
         ledcWrite(_channel, 0);
 #endif
         _pwmAttached = true;
@@ -206,9 +236,12 @@ private:
         if (freqHz == 0) {
             ledcWriteTone(_pin, 0);
             ledcWrite(_pin, 0);
+            ledcWriteTone(_pin2, 0);
+            ledcWrite(_pin2, 0);
         } else {
             // ledcWriteTone は内部で自動的にデューティ比 50% の矩形波を出力する
             ledcWriteTone(_pin, freqHz);
+            ledcWriteTone(_pin2, freqHz);
         }
 #else
         if (freqHz == 0) {
